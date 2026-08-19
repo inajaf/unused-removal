@@ -1,3 +1,5 @@
+//! Cross-platform configuration with platform-specific defaults
+
 use std::path::{Path, PathBuf};
 use std::env;
 use serde::{Deserialize, Serialize};
@@ -6,6 +8,7 @@ use anyhow::Result;
 use dirs;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
 pub struct Config {
     // General
     pub root: String,
@@ -38,51 +41,148 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
-        Self {
-            root: r"C:\".to_string(),
-            workers: 0, // 0 = auto (num CPUs)
-            follow_links: false,
-            exclude_dirs: vec![
-                r"$Recycle.Bin".to_string(),
-                r"System Volume Information".to_string(),
-                r"Windows\WinSxS".to_string(),
-                r"Windows\SoftwareDistribution".to_string(),
-                r"ProgramData\Microsoft\Windows Defender".to_string(),
-            ],
-            exclude_prefix: vec![],
-            large_bytes: 100 * 1024 * 1024,      // 100 MB
-            huge_bytes: 500 * 1024 * 1024,       // 500 MB
-            stale_days: 180,
-            old_log_days: 30,
-            stale_install_days: 90,
-            junk_extensions: vec![
-                ".tmp".to_string(),
-                ".temp".to_string(),
-                ".bak".to_string(),
-                ".old".to_string(),
-                ".dmp".to_string(),
-                ".chk".to_string(),
-                "~$*".to_string(),
-            ],
-            junk_dirs: vec![
-                "%TEMP%".to_string(),
-                r"C:\Windows\Temp".to_string(),
-                r"C:\Windows\Prefetch".to_string(),
-                r"%LOCALAPPDATA%\Google\Chrome\User Data\Default\Cache".to_string(),
-                r"%LOCALAPPDATA%\Microsoft\Edge\User Data\Default\Cache".to_string(),
-                r"%LOCALAPPDATA%\Mozilla\Firefox\Profiles".to_string(),
-            ],
-            check_duplicates: false,
-            protect_system: true,
-            allow_protected: false,
-            use_cache: true,
-            cache_dir: "".to_string(),
-            web_port: 0, // auto
-        }
+        Self::with_platform_defaults()
     }
 }
 
 impl Config {
+    /// Create config with platform-specific defaults
+    fn with_platform_defaults() -> Self {
+        #[cfg(windows)]
+        {
+            Self {
+                root: r"C:\".to_string(),
+                workers: 0,
+                follow_links: false,
+                exclude_dirs: vec![
+                    r"$Recycle.Bin".to_string(),
+                    r"System Volume Information".to_string(),
+                    r"Windows\WinSxS".to_string(),
+                    r"Windows\SoftwareDistribution".to_string(),
+                    r"ProgramData\Microsoft\Windows Defender".to_string(),
+                ],
+                exclude_prefix: vec![],
+                large_bytes: 100 * 1024 * 1024,      // 100 MB
+                huge_bytes: 500 * 1024 * 1024,       // 500 MB
+                stale_days: 180,
+                old_log_days: 30,
+                stale_install_days: 90,
+                junk_extensions: vec![
+                    ".tmp".to_string(),
+                    ".temp".to_string(),
+                    ".bak".to_string(),
+                    ".old".to_string(),
+                    ".dmp".to_string(),
+                    ".chk".to_string(),
+                    "~$*".to_string(),
+                ],
+                junk_dirs: vec![
+                    "%TEMP%".to_string(),
+                    r"C:\Windows\Temp".to_string(),
+                    r"C:\Windows\Prefetch".to_string(),
+                    r"%LOCALAPPDATA%\Google\Chrome\User Data\Default\Cache".to_string(),
+                    r"%LOCALAPPDATA%\Microsoft\Edge\User Data\Default\Cache".to_string(),
+                    r"%LOCALAPPDATA%\Mozilla\Firefox\Profiles".to_string(),
+                ],
+                check_duplicates: false,
+                protect_system: true,
+                allow_protected: false,
+                use_cache: true,
+                cache_dir: "".to_string(),
+                web_port: 0,
+            }
+        }
+        
+        #[cfg(target_os = "macos")]
+        {
+            Self {
+                root: "/".to_string(),
+                workers: 0,
+                follow_links: false,
+                exclude_dirs: vec![
+                    ".Trash".to_string(),
+                    "System".to_string(),
+                    "Library".to_string(),
+                    "private".to_string(),
+                    "Volumes".to_string(),
+                    "Network".to_string(),
+                ],
+                exclude_prefix: vec![],
+                large_bytes: 100 * 1024 * 1024,      // 100 MB
+                huge_bytes: 500 * 1024 * 1024,       // 500 MB
+                stale_days: 180,
+                old_log_days: 30,
+                stale_install_days: 90,
+                junk_extensions: vec![
+                    ".tmp".to_string(),
+                    ".temp".to_string(),
+                    ".bak".to_string(),
+                    ".old".to_string(),
+                    ".dmp".to_string(),
+                    ".chk".to_string(),
+                    ".DS_Store".to_string(),
+                ],
+                junk_dirs: vec![
+                    "$TMPDIR".to_string(),
+                    "/tmp".to_string(),
+                    "/private/tmp".to_string(),
+                    "/var/folders".to_string(),
+                    "$HOME/Library/Caches".to_string(),
+                    "$HOME/Library/Logs".to_string(),
+                ],
+                check_duplicates: false,
+                protect_system: true,
+                allow_protected: false,
+                use_cache: true,
+                cache_dir: "".to_string(),
+                web_port: 0,
+            }
+        }
+        
+        #[cfg(all(unix, not(target_os = "macos")))]
+        {
+            Self {
+                root: "/".to_string(),
+                workers: 0,
+                follow_links: false,
+                exclude_dirs: vec![
+                    "proc".to_string(),
+                    "sys".to_string(),
+                    "dev".to_string(),
+                    "run".to_string(),
+                    "tmp".to_string(),
+                    "var/tmp".to_string(),
+                ],
+                exclude_prefix: vec![],
+                large_bytes: 100 * 1024 * 1024,
+                huge_bytes: 500 * 1024 * 1024,
+                stale_days: 180,
+                old_log_days: 30,
+                stale_install_days: 90,
+                junk_extensions: vec![
+                    ".tmp".to_string(),
+                    ".temp".to_string(),
+                    ".bak".to_string(),
+                    ".old".to_string(),
+                    ".dmp".to_string(),
+                    ".chk".to_string(),
+                ],
+                junk_dirs: vec![
+                    "/tmp".to_string(),
+                    "/var/tmp".to_string(),
+                    "$HOME/.cache".to_string(),
+                    "$HOME/.local/share/Trash".to_string(),
+                ],
+                check_duplicates: false,
+                protect_system: true,
+                allow_protected: false,
+                use_cache: true,
+                cache_dir: "".to_string(),
+                web_port: 0,
+            }
+        }
+    }
+
     pub fn load(explicit_path: Option<&str>) -> Result<Self> {
         let mut cfg = Self::default();
 
@@ -98,7 +198,7 @@ impl Config {
         for p in paths {
             if p.exists() {
                 let content = std::fs::read_to_string(&p)?;
-                let mut decoded: Config = toml::from_str(&content)?;
+                let decoded: Config = toml::from_str(&content)?;
                 // Merge with defaults (explicit values override)
                 cfg.merge(&decoded);
                 break;
@@ -151,27 +251,77 @@ impl Config {
     }
 
     fn expand_env_vars(&mut self) {
-        fn expand_percent_vars(s: &str) -> String {
+        fn expand_vars(s: &str) -> String {
             let mut result = String::with_capacity(s.len());
             let mut chars = s.chars().peekable();
 
             while let Some(ch) = chars.next() {
                 if ch == '%' {
+                    // Windows %VAR% syntax
                     let mut var_name = String::new();
+                    let mut closed = false;
                     while let Some(&c) = chars.peek() {
+                        chars.next();
                         if c == '%' {
-                            chars.next(); // consume closing %
+                            closed = true;
                             break;
                         }
-                        var_name.push(chars.next().unwrap());
+                        var_name.push(c);
                     }
-                    if let Ok(val) = env::var(&var_name) {
-                        result.push_str(&val);
+                    if closed && !var_name.is_empty() {
+                        if let Ok(val) = env::var(&var_name) {
+                            result.push_str(&val);
+                        } else if var_name == "TEMP" || var_name == "TMP" {
+                            result.push_str(&env::temp_dir().to_string_lossy());
+                        } else {
+                            result.push('%');
+                            result.push_str(&var_name);
+                            result.push('%');
+                        }
                     } else {
-                        // Keep original %VAR% if not found
                         result.push('%');
                         result.push_str(&var_name);
-                        result.push('%');
+                    }
+                } else if ch == '$' {
+                    // Unix $VAR or ${VAR} syntax
+                    let mut var_name = String::new();
+                    if chars.peek() == Some(&'{') {
+                        chars.next(); // consume '{'
+                        while let Some(&c) = chars.peek() {
+                            chars.next();
+                            if c == '}' {
+                                break;
+                            }
+                            var_name.push(c);
+                        }
+                    } else {
+                        while let Some(&c) = chars.peek() {
+                            if c.is_alphanumeric() || c == '_' {
+                                var_name.push(c);
+                                chars.next();
+                            } else {
+                                break;
+                            }
+                        }
+                    }
+                    if !var_name.is_empty() {
+                        if let Ok(val) = env::var(&var_name) {
+                            result.push_str(&val);
+                        } else if var_name == "HOME" {
+                            if let Some(h) = dirs::home_dir() {
+                                result.push_str(&h.to_string_lossy());
+                            } else {
+                                result.push('$');
+                                result.push_str(&var_name);
+                            }
+                        } else if var_name == "TMPDIR" {
+                            result.push_str(&env::temp_dir().to_string_lossy());
+                        } else {
+                            result.push('$');
+                            result.push_str(&var_name);
+                        }
+                    } else {
+                        result.push('$');
                     }
                 } else {
                     result.push(ch);
@@ -180,9 +330,9 @@ impl Config {
             result
         }
 
-        self.exclude_dirs = self.exclude_dirs.iter().map(|s| expand_percent_vars(s)).collect();
-        self.exclude_prefix = self.exclude_prefix.iter().map(|s| expand_percent_vars(s)).collect();
-        self.junk_dirs = self.junk_dirs.iter().map(|s| expand_percent_vars(s)).collect();
+        self.exclude_dirs = self.exclude_dirs.iter().map(|s| expand_vars(s)).collect();
+        self.exclude_prefix = self.exclude_prefix.iter().map(|s| expand_vars(s)).collect();
+        self.junk_dirs = self.junk_dirs.iter().map(|s| expand_vars(s)).collect();
     }
 
     fn validate(&mut self) {
@@ -232,5 +382,13 @@ mod tests {
         cfg.junk_dirs = vec!["%TEMP%".to_string()];
         cfg.expand_env_vars();
         assert!(!cfg.junk_dirs[0].contains('%'));
+    }
+
+    #[test]
+    fn test_expand_dollar_vars() {
+        let mut cfg = Config::default();
+        cfg.junk_dirs = vec!["$HOME/.cache".to_string()];
+        cfg.expand_env_vars();
+        assert!(!cfg.junk_dirs[0].contains('$'));
     }
 }

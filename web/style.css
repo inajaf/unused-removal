@@ -60,7 +60,12 @@ body {
 
 .brand { display: flex; align-items: center; gap: 12px; }
 
-.brand-icon { font-size: 28px; }
+.brand-icon {
+  display: flex; align-items: center; justify-content: center;
+  width: 42px; height: 42px; border-radius: 10px;
+  background: linear-gradient(135deg, var(--accent), #8b5cf6);
+  color: #fff; box-shadow: 0 4px 12px var(--accent-glow);
+}
 
 .brand h1 { font-size: 1.25rem; font-weight: 700; letter-spacing: -0.02em; }
 
@@ -324,7 +329,21 @@ body {
 
 .path-cell { display: flex; align-items: center; gap: 10px; max-width: 500px; min-width: 200px; }
 
-.file-icon { font-size: 1.1rem; }
+.file-icon {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; flex-shrink: 0; border-radius: 6px;
+  background: var(--bg-elevated); border: 1px solid var(--border);
+  color: var(--fg-muted);
+}
+
+.icon { display: inline-block; vertical-align: middle; flex-shrink: 0; }
+
+.cat-icon { color: inherit; }
+
+.btn-icon { vertical-align: -2px; margin-right: 4px; }
+.modal-icon { vertical-align: -3px; margin-right: 6px; }
+.modal-icon.danger { color: var(--danger); }
+.modal-icon.success { color: var(--success); }
 
 .file-name {
   font-family: 'JetBrains Mono', monospace; font-size: 0.8rem;
@@ -346,6 +365,7 @@ body {
 .cat-stale_install { background: rgba(168,85,247,0.15); color: #a855f7; }
 .cat-stale { background: rgba(107,114,128,0.15); color: #9ca3af; }
 .cat-duplicate { background: rgba(249,115,22,0.15); color: #f97316; }
+.cat-file { background: rgba(107,114,128,0.15); color: #9ca3af; }
 
 .risk-badge {
   display: inline-block; padding: 3px 10px; border-radius: 999px;

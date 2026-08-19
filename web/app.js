@@ -65,9 +65,34 @@ function categoryLabel(cat) {
   return labels[cat] || cat;
 }
 
+// ===== Professional icon set (Lucide-style inline SVG, no external deps) =====
+const ICON_PATHS = {
+  huge: '<path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
+  large: '<path d="M14.5 17.5 3 6V3h3l11.5 11.5"/><path d="M13 19l6-6"/><path d="M16 16l4 4"/><path d="M19 21l2-2"/>',
+  junk: '<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/>',
+  old_log: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/>',
+  stale_install: '<path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/>',
+  stale: '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
+  duplicate: '<rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
+  file: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>',
+  folder: '<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>',
+  pencil: '<path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/>',
+  trash: '<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
+  check_circle: '<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>',
+  alert: '<path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
+  octagon: '<polygon points="7.86 2 16.14 2 22 7.86 22 16.14 16.14 22 7.86 22 2 16.14 2 7.86 7.86 2"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>',
+  search: '<circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>',
+  folder_plus: '<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/>',
+  x: '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>',
+};
+
+function iconSvg(name, size = 16, cls = '') {
+  const body = ICON_PATHS[name] || ICON_PATHS.file;
+  return `<svg class="icon ${cls}" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
+}
+
 function categoryIcon(cat) {
-  const icons = { huge: '🔴', large: '🟠', junk: '🗑', old_log: '📄', stale_install: '📦', stale: '⏳', duplicate: '🔁' };
-  return icons[cat] || '📁';
+  return iconSvg(cat, 15, `cat-icon cat-${cat || 'file'}`);
 }
 
 function riskLabel(risk) {
@@ -133,7 +158,6 @@ function init() {
   cacheElements();
   bindEvents();
   loadConfig();
-  detectDrives();
 }
 
 function cacheElements() {
@@ -180,6 +204,7 @@ function cacheElements() {
   els.btnHard = document.getElementById('btn-hard');
   els.btnExportJson = document.getElementById('btn-export-json');
   els.btnExportCsv = document.getElementById('btn-export-csv');
+  els.selectionSummary = document.getElementById('selection-summary');
 
   // Modal
   els.modal = document.getElementById('modal');
@@ -249,15 +274,45 @@ async function loadConfig() {
     els.useCache.checked = cfg.use_cache ?? true;
     els.checkDuplicates.checked = cfg.check_duplicates ?? false;
     els.protectSystem.checked = cfg.protect_system ?? true;
-  } catch (e) { console.warn('Config load failed:', e); }
+
+    // Populate drives / root paths according to OS
+    populateRootPaths(cfg);
+  } catch (e) {
+    console.warn('Config load failed:', e);
+    detectDrivesFallback();
+  }
 }
 
-function detectDrives() {
-  const drives = ['C:\\', 'D:\\', 'E:\\', 'F:\\', 'G:\\'];
-  els.rootSelect.innerHTML = drives.map(d => `<option value="${d}">${d}</option>`).join('');
+function populateRootPaths(cfg) {
+  const paths = cfg.default_paths && cfg.default_paths.length > 0 
+    ? cfg.default_paths 
+    : (cfg.os === 'macos' || cfg.os === 'linux' ? ['/', '.'] : ['C:\\', 'D:\\']);
+
+  els.rootSelect.innerHTML = paths.map(p => `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`).join('');
+  
   const opt = document.createElement('option');
   opt.value = 'custom';
-  opt.textContent = '📝 Указать свой путь...';
+  opt.textContent = 'Указать свой путь...';
+  els.rootSelect.appendChild(opt);
+
+  // If configured root is valid and in the list, select it
+  if (cfg.root && paths.includes(cfg.root)) {
+    els.rootSelect.value = cfg.root;
+  } else if (cfg.root && cfg.root !== 'C:\\') {
+    // If it's a custom path, switch to custom input
+    els.rootSelect.value = 'custom';
+    els.rootCustom.hidden = false;
+    els.rootCustom.value = cfg.root;
+  }
+}
+
+function detectDrivesFallback() {
+  const isUnix = !navigator.userAgent.includes('Windows');
+  const defaults = isUnix ? ['/', '.'] : ['C:\\', 'D:\\', 'E:\\'];
+  els.rootSelect.innerHTML = defaults.map(d => `<option value="${d}">${d}</option>`).join('');
+  const opt = document.createElement('option');
+  opt.value = 'custom';
+  opt.textContent = 'Указать свой путь...';
   els.rootSelect.appendChild(opt);
 }
 
@@ -299,11 +354,8 @@ async function startScan() {
     protect_system: els.protectSystem.checked
   };
 
-  // Save config
-  try {
-    const current = await api.getConfig();
-    await api.saveConfig({ ...current, ...config });
-  } catch (e) { console.warn('Config save failed:', e); }
+  // Save config (non-blocking; extra UI fields must not break scan)
+  api.saveConfig(config).catch(e => console.warn('Config save failed:', e));
 
   setPhase('scanning');
   state.currentPage = 1;
@@ -314,7 +366,11 @@ async function startScan() {
     state.scanId = res.scan_id;
     pollProgress();
   } catch (e) {
-    showToast('Ошибка запуска: ' + e.message, 'error');
+    const msg = e && e.message ? e.message : String(e);
+    const hint = msg.includes('Failed to fetch')
+      ? 'Сервер недоступен. Запустите: unused-removal serve'
+      : msg;
+    showToast('Ошибка запуска: ' + hint, 'error');
     setPhase('config');
   }
 }
@@ -523,7 +579,7 @@ function updateSummary() {
   state.findings.forEach(f => { byCat[f.category] = (byCat[f.category] || 0) + 1; });
   const parts = Object.entries(byCat).map(([cat, cnt]) => `${categoryIcon(cat)} ${categoryLabel(cat)}: ${cnt}`).join(' • ');
   if (els.summaryTotal) els.summaryTotal.textContent = String(state.findings.length);
-  if (els.summaryCats) els.summaryCats.textContent = parts || 'пусто';
+  if (els.summaryCats) els.summaryCats.innerHTML = parts || 'пусто';
 }
 
 function cycleCategoryFilter() {
@@ -548,7 +604,8 @@ function confirmDelete(mode) {
   if (state.selectedPaths.size === 0) return;
   state.pendingDeleteMode = mode;
   const isHard = mode === 'hard';
-  els.modalTitle.textContent = isHard ? '⚠️ Безвозвратное удаление' : '🗑 Перемещение в Корзину';
+  els.modalTitle.innerHTML = (isHard ? iconSvg('octagon', 18, 'modal-icon danger') : iconSvg('trash', 18, 'modal-icon')) + ' ' +
+    (isHard ? 'Безвозвратное удаление' : 'Перемещение в Корзину');
   const totalSize = Array.from(state.selectedPaths).reduce((sum, p) => {
     const f = state.findings.find(x => x.path === p);
     return sum + (f?.size || 0);
@@ -556,9 +613,9 @@ function confirmDelete(mode) {
   els.modalText.innerHTML = `
 Удалить <strong>${formatNumber(state.selectedPaths.size)}</strong> файлов 
 (<strong>${formatBytes(totalSize)}</strong>)?<br><br>
-${isHard ? '⚠️ <strong>Это действие НЕОБРАТИМО!</strong> Файлы не попадут в Корзину.' : '✅ Файлы можно будет восстановить из Корзины.'}
+${isHard ? iconSvg('alert', 16, 'modal-icon danger') + ' <strong>Это действие НЕОБРАТИМО!</strong> Файлы не попадут в Корзину.' : iconSvg('check_circle', 16, 'modal-icon success') + ' Файлы можно будет восстановить из Корзины.'}
   `;
-  els.modalConfirm.textContent = isHard ? '💀 Удалить навсегда' : '🗑 В Корзину';
+  els.modalConfirm.innerHTML = (isHard ? iconSvg('octagon', 15, 'btn-icon') : iconSvg('trash', 15, 'btn-icon')) + ' ' + (isHard ? 'Удалить навсегда' : 'В Корзину');
   els.modalConfirm.className = isHard ? 'btn danger' : 'btn primary';
   els.modal.classList.remove('hidden');
   els.modalConfirm.focus();

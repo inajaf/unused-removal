@@ -10,7 +10,7 @@ use axum::{
     extract::{Query, State},
     http::StatusCode,
     response::{IntoResponse, Json, Response},
-    routing::{get, post, put},
+    routing::{get, post},
     Router,
 };
 use axum::body::Body;
@@ -20,10 +20,10 @@ use tokio::signal;
 use tracing::{info, error};
 
 use crate::config::Config;
-use crate::scanner::{Walker, Progress};
-use crate::scanner_types::{Options, FileRecord, ScanError, ProgressSnapshot};
+use crate::scanner::{Scanner, Progress};
+use crate::scanner_types::{Options, FileRecord, ScanError};
 use crate::cache::{Cache, BoltCache, config_hash as cache_config_hash};
-use crate::rules::{Engine, Finding, Category, Risk};
+use crate::rules::{Engine, Finding, Category};
 use crate::cleaner::{recycle_bin, hard_delete, DeleteResult};
 
 #[derive(RustEmbed)]
@@ -34,7 +34,7 @@ struct WebAssets;
 #[derive(Clone)]
 pub struct ServerState {
     config: Arc<Mutex<Config>>,
-    scanner: Arc<Mutex<Option<Walker>>>,
+    scanner: Arc<Mutex<Option<Scanner>>>,
     progress: Arc<Mutex<Option<Progress>>>,
     findings: Arc<Mutex<Vec<Finding>>>,
     records: Arc<Mutex<Vec<FileRecord>>>,
@@ -120,6 +120,8 @@ mod api {
     #[derive(Serialize)]
     pub struct ConfigResponse {
         pub root: String,
+        pub os: String,
+        pub default_paths: Vec<String>,
         pub workers: usize,
         pub follow_links: bool,
         pub use_cache: bool,
@@ -139,8 +141,43 @@ mod api {
 
     impl From<&Config> for ConfigResponse {
         fn from(c: &Config) -> Self {
+            let os = std::env::consts::OS.to_string();
+            let mut default_paths = Vec::new();
+            
+            #[cfg(target_os = "macos")]
+            {
+                if let Some(home) = dirs::home_dir() {
+                    let home_str = home.to_string_lossy().to_string();
+                    default_paths.push(home_str.clone());
+                    default_paths.push(format!("{}/Downloads", home_str));
+                    default_paths.push(format!("{}/Documents", home_str));
+                    default_paths.push(format!("{}/Library/Caches", home_str));
+                }
+                default_paths.push("/".to_string());
+            }
+
+            #[cfg(target_os = "windows")]
+            {
+                for letter in b'C'..=b'Z' {
+                    let drive = format!("{}:\\", letter as char);
+                    if std::path::Path::new(&drive).exists() {
+                        default_paths.push(drive);
+                    }
+                }
+            }
+
+            #[cfg(all(unix, not(target_os = "macos")))]
+            {
+                if let Some(home) = dirs::home_dir() {
+                    default_paths.push(home.to_string_lossy().to_string());
+                }
+                default_paths.push("/".to_string());
+            }
+
             Self {
                 root: c.root.clone(),
+                os,
+                default_paths,
                 workers: c.workers,
                 follow_links: c.follow_links,
                 use_cache: c.use_cache,
@@ -174,6 +211,7 @@ pub fn create_router(state: ServerState) -> Router {
         .route("/api/config", get(handle_get_config).put(handle_put_config))
         .route("/api/export", get(handle_export))
         .fallback(handle_static)
+        .layer(tower_http::cors::CorsLayer::permissive())
         .with_state(state)
 }
 
@@ -240,6 +278,11 @@ async fn handle_scan(
         *scan_id
     };
     
+    // Drop the previous scanner (and its open redb DB handle) BEFORE creating
+    // a new one — redb locks the database file, so a second Database::create
+    // on the same path fails silently unless the old handle is released first.
+    *state.scanner.lock().unwrap() = None;
+    
     *state.findings.lock().unwrap() = Vec::new();
     *state.records.lock().unwrap() = Vec::new();
     *state.errors.lock().unwrap() = Vec::new();
@@ -261,8 +304,8 @@ async fn handle_scan(
         BoltCache::new("unused-removal", &hash).ok().map(|c| Arc::new(c) as Arc<dyn Cache>)
     } else { None };
 
-    let walker = Walker::new(opts, progress, cache);
-    *state.scanner.lock().unwrap() = Some(walker.clone());
+    let scanner = Scanner::new(opts, progress, cache);
+    *state.scanner.lock().unwrap() = Some(scanner.clone());
     
     let root = cfg.root.clone();
     let state_clone = state.clone();
@@ -270,7 +313,7 @@ async fn handle_scan(
     
     tokio::spawn(async move {
         let root_for_walk = root.clone();
-        let recs_result = tokio::task::spawn_blocking(move || walker.walk(&root_for_walk)).await;
+        let recs_result = tokio::task::spawn_blocking(move || scanner.walk(&root_for_walk)).await;
         
         let (recs, errs) = match recs_result {
             Ok(Ok((r, e))) => (r, e),
@@ -294,13 +337,13 @@ async fn handle_scan(
         
         findings.sort_by(|a, b| b.size.cmp(&a.size));
         
+        if let Some(p) = state_clone.progress.lock().unwrap().as_ref() {
+            p.finish();
+        }
         *state_clone.records.lock().unwrap() = recs;
         *state_clone.errors.lock().unwrap() = errs;
         *state_clone.findings.lock().unwrap() = findings;
         *state_clone.scan_done.lock().unwrap() = true;
-        if let Some(p) = state_clone.progress.lock().unwrap().as_ref() {
-            p.finish();
-        }
     });
     
     Json(ScanResponse { scan_id, status: "started".to_string() })
@@ -409,15 +452,42 @@ async fn handle_get_config(State(state): State<ServerState>) -> impl IntoRespons
 
 async fn handle_put_config(
     State(state): State<ServerState>,
-    Json(cfg): Json<Config>,
+    Json(update): Json<serde_json::Value>,
 ) -> Response {
+    let mut cfg = state.config.lock().unwrap().clone();
+
+    if let Some(v) = update.get("root").and_then(|x| x.as_str()) {
+        cfg.root = v.to_string();
+    }
+    if let Some(v) = update.get("workers").and_then(|x| x.as_u64()) {
+        cfg.workers = v as usize;
+    }
+    if let Some(v) = update.get("follow_links").and_then(|x| x.as_bool()) {
+        cfg.follow_links = v;
+    }
+    if let Some(v) = update.get("use_cache").and_then(|x| x.as_bool()) {
+        cfg.use_cache = v;
+    }
+    if let Some(v) = update.get("check_duplicates").and_then(|x| x.as_bool()) {
+        cfg.check_duplicates = v;
+    }
+    if let Some(v) = update.get("protect_system").and_then(|x| x.as_bool()) {
+        cfg.protect_system = v;
+    }
+    if let Some(v) = update.get("allow_protected").and_then(|x| x.as_bool()) {
+        cfg.allow_protected = v;
+    }
+    if let Some(v) = update.get("web_port").and_then(|x| x.as_u64()) {
+        cfg.web_port = v as u16;
+    }
+
     *state.config.lock().unwrap() = cfg.clone();
-    
+
     if let Err(e) = cfg.save(Path::new("config.toml")) {
         error!("Failed to save config: {}", e);
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() }))).into_response();
+        return Json(serde_json::json!({ "status": "saved_memory", "warning": e.to_string() })).into_response();
     }
-    
+
     Json(serde_json::json!({ "status": "saved" })).into_response()
 }
 
@@ -466,9 +536,10 @@ async fn handle_export(
 
 async fn handle_static(
     State(_state): State<ServerState>,
-    axum::extract::Path(path): axum::extract::Path<String>,
+    uri: axum::http::Uri,
 ) -> Response {
-    let path = if path.is_empty() || path == "/" { "index.html" } else { &path };
+    let path = uri.path().trim_start_matches('/');
+    let path = if path.is_empty() { "index.html" } else { path };
     
     match WebAssets::get(path) {
         Some(content) => {

@@ -1,15 +1,41 @@
-root = "C:\\"
-workers = 0
+root = "/Users/eldar"
+workers = 4
 follow_links = false
-exclude_dirs = ["$Recycle.Bin", "System Volume Information", "Windows\\WinSxS", "Windows\\SoftwareDistribution", "ProgramData\\Microsoft\\Windows Defender"]
+exclude_dirs = [
+    ".Trash",
+    "Library",
+    "System",
+    "private",
+    "Volumes",
+    "Network",
+    "$Recycle.Bin",
+    "System Volume Information",
+    'Windows\WinSxS',
+]
 exclude_prefix = []
 large_bytes = 104857600
 huge_bytes = 524288000
 stale_days = 180
 old_log_days = 30
 stale_install_days = 90
-junk_extensions = [".tmp", ".temp", ".bak", ".old", ".dmp", ".chk", "~$*"]
-junk_dirs = ["C:\\Users\\najaf\\AppData\\Local\\Temp", "C:\\Windows\\Temp", "C:\\Windows\\Prefetch", "C:\\Users\\najaf\\AppData\\Local\\Google\\Chrome\\User Data\\Default\\Cache", "C:\\Users\\najaf\\AppData\\Local\\Microsoft\\Edge\\User Data\\Default\\Cache", "C:\\Users\\najaf\\AppData\\Local\\Mozilla\\Firefox\\Profiles"]
+junk_extensions = [
+    ".tmp",
+    ".temp",
+    ".bak",
+    ".old",
+    ".dmp",
+    ".chk",
+    ".DS_Store",
+    "~$*",
+]
+junk_dirs = [
+    "/var/folders/5d/bdzp8fbd71sdf29qkwr3g64m0000gn/T/",
+    "/tmp",
+    "/private/tmp",
+    "/var/folders",
+    "/Users/eldar/Library/Caches",
+    "/Users/eldar/Library/Logs",
+]
 check_duplicates = false
 protect_system = true
 allow_protected = false

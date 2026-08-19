@@ -58,6 +58,7 @@ impl Default for Options {
 
 /// Cached directory entry
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct CacheEntry {
     pub fingerprint: Fingerprint,
     pub files: Vec<FileRecord>,

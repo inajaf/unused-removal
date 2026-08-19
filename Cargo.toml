@@ -2,7 +2,7 @@
 name = "unused-removal"
 version = "0.1.0"
 edition = "2021"
-description = "Sverkhbystroy poisk i bezopasnoye udalenie nuzhnykh faylov na Windows"
+description = "Fast cross-platform file scanner and cleaner for Windows and macOS"
 license = "MIT"
 repository = "https://github.com/your/unused-removal"
 authors = ["Your Name <your@email.com>"]
@@ -32,18 +32,8 @@ toml = "0.8"
 serde = { version = "1.0", features = ["derive"] }
 dirs = "5.0"
 
-# Windows API
-windows = { version = "0.59", features = [
-    "Win32_Foundation",
-    "Win32_System_Console",
-    "Win32_Storage_FileSystem",
-    "Win32_UI_Shell",
-    "Win32_System_Threading",
-    "Win32_System_Com",
-    "Win32_System_Memory",
-    "Win32_System_SystemServices",
-    "Win32_Security",
-] }
+# Cross-platform file operations
+trash = "3.0"
 
 # Parallel processing
 rayon = "1.10"
@@ -80,3 +70,23 @@ walkdir = "2.5"
 scopeguard = "1.2"
 num_cpus = "1.16"
 tempfile = "3.10"
+jwalk = "0.9.0"
+
+# Windows API (Windows only)
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_System_Console",
+    "Win32_Storage_FileSystem",
+    "Win32_UI_Shell",
+    "Win32_System_Threading",
+    "Win32_System_Com",
+    "Win32_System_Memory",
+    "Win32_System_SystemServices",
+    "Win32_Security",
+] }
+
+# macOS-specific (for FSEvents or other optimizations)
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.9"
+core-foundation-sys = "0.8"

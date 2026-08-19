@@ -4,25 +4,26 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use redb::{Database, TableDefinition, ReadableTable};
 use anyhow::Result;
-use serde::{Serialize, Deserialize};
 
-use crate::scanner_types::{CacheEntry, FileRecord, Fingerprint, Options as ScannerOptions};
+use crate::scanner_types::{CacheEntry, Fingerprint, Options as ScannerOptions};
 
 const CACHE_TABLE: TableDefinition<&[u8], &[u8]> = TableDefinition::new("cache");
 const META_TABLE: TableDefinition<&[u8], &[u8]> = TableDefinition::new("meta");
 
 /// Cache trait for incremental scanning
 pub trait Cache: Send + Sync {
+    #[allow(dead_code)]
     fn lookup(&self, key: &str, fp: &Fingerprint) -> Option<CacheEntry>;
+    #[allow(dead_code)]
     fn save(&self, key: &str, entry: CacheEntry) -> Result<()>;
     fn save_total(&self, n: i64) -> Result<()>;
     fn load_total(&self) -> Option<i64>;
-    fn close(&self) -> Result<()>;
 }
 
 /// Redb-based cache implementation
 pub struct BoltCache {
     db: Arc<Database>,
+    #[allow(dead_code)]
     generation: String,
 }
 
@@ -109,11 +110,10 @@ impl Cache for BoltCache {
         let bytes: [u8; 8] = data.value().try_into().ok()?;
         Some(i64::from_le_bytes(bytes))
     }
-
-    fn close(&self) -> Result<()> { Ok(()) }
 }
 
 /// Compute a simple hash of configuration for cache invalidation
+#[allow(dead_code)]
 pub fn config_hash(opts: &ScannerOptions) -> String {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};

@@ -12,6 +12,7 @@ use crate::config::Config;
 use crate::scanner_types::FileRecord;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Category {
     Huge,
     Large,
@@ -53,6 +54,7 @@ impl std::str::FromStr for Category {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Risk {
     Safe,
     Caution,
@@ -66,8 +68,17 @@ pub struct Finding {
     pub category: Category,
     pub reason: String,
     pub risk: Risk,
+    #[serde(serialize_with = "serialize_system_time")]
     pub mod_time: std::time::SystemTime,
     pub extra: Option<std::collections::HashMap<String, String>>,
+}
+
+fn serialize_system_time<S>(t: &std::time::SystemTime, s: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    let dt: chrono::DateTime<chrono::Utc> = t.clone().into();
+    s.serialize_str(&dt.to_rfc3339())
 }
 
 impl Finding {
@@ -90,6 +101,7 @@ impl Finding {
 }
 
 /// Protected system paths that should never be deleted by default
+#[cfg(windows)]
 const PROTECTED_PATHS: &[&str] = &[
     r"c:\windows\winsxs\",
     r"c:\windows\system32\",
@@ -106,6 +118,32 @@ const PROTECTED_PATHS: &[&str] = &[
     r"c:\recovery\",
     r"c:\system volume information\",
     r"c:\$recycle.bin\",
+];
+
+#[cfg(target_os = "macos")]
+const PROTECTED_PATHS: &[&str] = &[
+    "/system/",
+    "/library/",
+    "/usr/",
+    "/bin/",
+    "/sbin/",
+    "/private/var/",
+    "/private/etc/",
+    "/applications/",
+];
+
+#[cfg(all(unix, not(target_os = "macos")))]
+const PROTECTED_PATHS: &[&str] = &[
+    "/boot/",
+    "/etc/",
+    "/bin/",
+    "/sbin/",
+    "/lib/",
+    "/lib64/",
+    "/usr/",
+    "/proc/",
+    "/sys/",
+    "/dev/",
 ];
 
 pub fn is_protected(path: &str) -> bool {
@@ -419,14 +457,27 @@ fn format_bytes(bytes: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scanner::{FileRecord, Attrs};
-    use std::time::SystemTime;
 
     #[test]
     fn test_is_protected() {
-        assert!(is_protected(r"C:\Windows\System32\kernel32.dll"));
-        assert!(is_protected(r"C:\Program Files\App\file.exe"));
-        assert!(!is_protected(r"C:\Users\User\file.txt"));
+        #[cfg(windows)]
+        {
+            assert!(is_protected(r"C:\Windows\System32\kernel32.dll"));
+            assert!(is_protected(r"C:\Program Files\App\file.exe"));
+            assert!(!is_protected(r"C:\Users\User\file.txt"));
+        }
+        #[cfg(target_os = "macos")]
+        {
+            assert!(is_protected("/System/Library/CoreServices/Finder.app"));
+            assert!(is_protected("/usr/bin/python3"));
+            assert!(!is_protected("/Users/eldar/Documents/file.txt"));
+        }
+        #[cfg(all(unix, not(target_os = "macos")))]
+        {
+            assert!(is_protected("/etc/passwd"));
+            assert!(is_protected("/usr/bin/cat"));
+            assert!(!is_protected("/home/user/file.txt"));
+        }
     }
 
     #[test]

@@ -14,12 +14,12 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style, Stylize},
     text::{Line, Text},
-    widgets::{Block, Borders, Clear, Gauge, List, ListItem, ListState, Paragraph, Row, Table, Wrap, TableState},
+    widgets::{Block, Borders, Clear, Gauge, List, ListItem, Paragraph, Row, Table, Wrap, TableState},
     Frame, Terminal,
 };
 
 use crate::config::Config;
-use crate::scanner::{Walker, Progress};
+use crate::scanner::{Scanner, Progress};
 use crate::scanner_types::{Options, FileRecord, ScanError};
 use crate::cache::{Cache, BoltCache, config_hash as cache_config_hash};
 use crate::rules::{Engine, Finding, Category, Risk};
@@ -82,7 +82,7 @@ struct App {
     
     // Scanning
     progress: Progress,
-    walker: Option<Walker>,
+    scanner: Option<Scanner>,
     scan_handle: Option<std::thread::JoinHandle<anyhow::Result<(Vec<FileRecord>, Vec<ScanError>)>>>,
     scan_start: Option<Instant>,
     
@@ -93,7 +93,6 @@ struct App {
     table_state: TableState,
     filter_category: Option<Category>,
     search: String,
-    sort_by: SortBy,
     sort_desc: bool,
     
     // Delete confirmation
@@ -103,15 +102,6 @@ struct App {
     // UI
     last_tick: Instant,
     status_msg: Option<(String, Style)>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SortBy {
-    Size,
-    Category,
-    Path,
-    Risk,
-    ModTime,
 }
 
 impl App {
@@ -127,7 +117,7 @@ impl App {
             protect_system: config.protect_system,
             config_focus: 0,
             progress: Progress::new(),
-            walker: None,
+            scanner: None,
             scan_handle: None,
             scan_start: None,
             findings: Vec::new(),
@@ -136,7 +126,6 @@ impl App {
             table_state: TableState::default(),
             filter_category: None,
             search: String::new(),
-            sort_by: SortBy::Size,
             sort_desc: true,
             delete_mode: None,
             delete_paths: Vec::new(),
@@ -260,14 +249,14 @@ impl App {
     fn handle_scanning_key(&mut self, key: KeyCode) {
         match key {
             KeyCode::Char('q') | KeyCode::Esc => {
-                if let Some(w) = &self.walker {
-                    w.stop();
+                if let Some(s) = &self.scanner {
+                    s.stop();
                 }
                 self.state = AppState::Config;
             }
             KeyCode::Char('s') => {
-                if let Some(w) = &self.walker {
-                    w.stop();
+                if let Some(s) = &self.scanner {
+                    s.stop();
                 }
                 self.state = AppState::Config;
                 self.status_msg = Some(("Scan stopped".to_string(), Style::default().fg(Color::Yellow)));
@@ -286,6 +275,7 @@ impl App {
             KeyCode::Char('/') => {
                 self.status_msg = Some(("Type to search, Esc to clear".to_string(), Style::default().fg(Color::Cyan)));
             }
+            KeyCode::Char(' ') => self.toggle_selection(),
             KeyCode::Char(c) => {
                 self.search.push(c);
                 self.apply_filters();
@@ -296,7 +286,6 @@ impl App {
             }
             KeyCode::Up => self.previous_row(),
             KeyCode::Down => self.next_row(),
-            KeyCode::Char(' ') => self.toggle_selection(),
             KeyCode::Enter => self.toggle_selection(),
             _ => {}
         }
@@ -344,8 +333,7 @@ impl App {
             None
         };
 
-        let walker = Walker::new(opts, self.progress.clone(), cache);
-        self.walker = Some(walker.clone());
+        let scanner = Scanner::new(opts, self.progress.clone(), cache);
         let root = self.config.root.clone();
 
         self.findings.clear();
@@ -356,7 +344,7 @@ impl App {
         self.scan_start = Some(Instant::now());
         self.status_msg = None;
 
-        self.scan_handle = Some(std::thread::spawn(move || walker.walk(&root)));
+        self.scan_handle = Some(std::thread::spawn(move || scanner.walk(&root)));
     }
 
     fn apply_filters(&mut self) {
@@ -376,15 +364,9 @@ impl App {
             .cloned()
             .collect();
 
-        // Sort
+        // Sort (by size; ascending/descending toggle)
         self.filtered_findings.sort_by(|a, b| {
-            let ord = match self.sort_by {
-                SortBy::Size => a.size.cmp(&b.size),
-                SortBy::Category => format!("{:?}", a.category).cmp(&format!("{:?}", b.category)),
-                SortBy::Path => a.path.cmp(&b.path),
-                SortBy::Risk => format!("{:?}", a.risk).cmp(&format!("{:?}", b.risk)),
-                SortBy::ModTime => a.mod_time.cmp(&b.mod_time),
-            };
+            let ord = a.size.cmp(&b.size);
             if self.sort_desc { ord.reverse() } else { ord }
         });
 

@@ -1,4 +1,4 @@
-//! unused-removal - Fast file scanner and cleaner for Windows
+//! unused-removal - Fast cross-platform file scanner and cleaner
 
 mod config;
 mod scanner;
@@ -15,17 +15,13 @@ pub use scanner_types::{
     Fingerprint, Attrs, FileRecord, ScanError, Options, ProgressSnapshot, DirId,
     FLUSH_BATCH, RECENT_CAP,
 };
-pub use scanner::Progress;
+pub use crate::scanner::platform::Progress;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use tracing_subscriber::{EnvFilter, fmt};
 
 use crate::config::Config;
-use crate::scanner::Walker;
-use crate::cache::{Cache, BoltCache, config_hash as cache_config_hash};
-use crate::rules::{Engine, Finding, Category};
-use crate::cleaner::{recycle_bin, hard_delete};
 use crate::server::run_server;
 use crate::cli::{scan_cmd, bench_cmd, config_cmd};
 

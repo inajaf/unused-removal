@@ -6,12 +6,11 @@ use std::path::Path;
 use anyhow::Result;
 use indicatif::{ProgressBar, ProgressStyle, MultiProgress};
 use colored::*;
-use rayon::prelude::*;
 use tempfile;
 
 use crate::config::Config;
-use crate::scanner::{Walker, Progress as ScannerProgress};
-use crate::scanner_types::{Options, FileRecord, ScanError};
+use crate::scanner::{Scanner, Progress as ScannerProgress};
+use crate::scanner_types::Options;
 use crate::cache::{Cache, BoltCache, config_hash as cache_config_hash};
 use crate::rules::{Engine, Finding, Category};
 
@@ -78,10 +77,10 @@ pub fn scan_cmd(
         None
     };
 
-    let walker = Walker::new(opts, progress, cache);
+    let scanner = Scanner::new(opts, progress, cache);
     
     // Run scan in blocking task
-    let (records, errors) = walker.walk(&config.root)?;
+    let (records, errors) = scanner.walk(&config.root)?;
     
     pb.finish_and_clear();
     progress_handle.join().unwrap();
@@ -155,10 +154,10 @@ pub fn bench_cmd(config: &Config, files: usize, depth: usize, serial: bool) -> R
 
     // Parallel scan
     let progress = ScannerProgress::new();
-    let walker = Walker::new(opts.clone(), progress, None);
+    let scanner = Scanner::new(opts.clone(), progress, None);
     
     let start = Instant::now();
-    let (records, _) = walker.walk(&cfg.root)?;
+    let (records, _) = scanner.walk(&cfg.root)?;
     let par_time = start.elapsed();
     
     println!(
@@ -173,10 +172,10 @@ pub fn bench_cmd(config: &Config, files: usize, depth: usize, serial: bool) -> R
         cfg.workers = 1;
         let opts_serial = Options { workers: 1, ..opts };
         let progress2 = ScannerProgress::new();
-        let walker2 = Walker::new(opts_serial, progress2, None);
+        let scanner2 = Scanner::new(opts_serial, progress2, None);
         
         let start = Instant::now();
-        let (records2, _) = walker2.walk(&cfg.root)?;
+        let (records2, _) = scanner2.walk(&cfg.root)?;
         let ser_time = start.elapsed();
         
         println!(
@@ -326,29 +325,42 @@ fn escape_csv(s: &str) -> String {
     }
 }
 
-/// Create test fixture for benchmarking
+/// Create test fixture for benchmarking — exactly `total_files` files,
+/// spread across a shallow directory tree so fixture creation is fast.
 fn create_fixture(root: &Path, total_files: usize, depth: usize) -> Result<()> {
-    let files_per_dir = (total_files / 100).max(1);
-    let _dirs = (total_files / files_per_dir).max(1);
-    
-    fn create_dir_recursive(path: &Path, current_depth: usize, max_depth: usize, files_per_dir: usize) -> Result<()> {
-        if current_depth >= max_depth {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let per_dir = (total_files / 64).max(1);
+    let counter = AtomicUsize::new(0);
+
+    fn create_dir_recursive(
+        path: &Path,
+        current_depth: usize,
+        max_depth: usize,
+        per_dir: usize,
+        total: usize,
+        counter: &AtomicUsize,
+    ) -> Result<()> {
+        if current_depth >= max_depth || counter.load(Ordering::Relaxed) >= total {
             return Ok(());
         }
-        
         for i in 0..10 {
             let subdir = path.join(format!("dir_{}_{}", current_depth, i));
             std::fs::create_dir_all(&subdir)?;
-            
-            for j in 0..files_per_dir {
-                let file = subdir.join(format!("file_{}_{}.tmp", current_depth, j));
+            for _ in 0..per_dir {
+                if counter.fetch_add(1, Ordering::Relaxed) >= total {
+                    return Ok(());
+                }
+                let file = subdir.join(format!("file_{}.tmp", counter.load(Ordering::Relaxed)));
                 std::fs::write(&file, vec![b'x'; 1024])?;
             }
-            
-            create_dir_recursive(&subdir, current_depth + 1, max_depth, files_per_dir)?;
+            create_dir_recursive(&subdir, current_depth + 1, max_depth, per_dir, total, counter)?;
         }
         Ok(())
     }
-    
-    create_dir_recursive(root, 0, depth, files_per_dir)
+
+    let _ = depth;
+    let total = total_files.max(1);
+    create_dir_recursive(root, 0, depth.min(4), per_dir, total, &counter)?;
+    Ok(())
 }

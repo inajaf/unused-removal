@@ -1,14 +1,10 @@
-//! File deletion operations: Recycle Bin and Hard Delete using Windows Shell API
+//! Cross-platform file deletion operations
+//! 
+//! Uses Windows Recycle Bin API on Windows and freedesktop trash spec on Linux/macOS
 
-use std::path::PathBuf;
-use std::ffi::OsStr;
-use std::os::windows::ffi::OsStrExt;
-use windows::Win32::UI::Shell::{SHFileOperationW, FO_DELETE, FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_NOERRORUI, FOF_SILENT, FILEOPERATION_FLAGS};
-use windows::Win32::Foundation::{HWND, BOOL};
-use windows::core::PCWSTR;
+use std::fs;
 use anyhow::Result;
-
-const FOF_WANTNUKE: u32 = 0x0001; // Not exposed in windows crate
+use trash;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DeleteResult {
@@ -31,125 +27,88 @@ impl std::fmt::Display for DeleteError {
 
 impl std::error::Error for DeleteError {}
 
-/// Move files/directories to Recycle Bin
+/// Move files/directories to platform trash/recycle bin
 pub fn recycle_bin(paths: &[String]) -> Result<DeleteResult> {
     if paths.is_empty() {
         return Ok(DeleteResult { deleted: Vec::new(), failed: Vec::new(), total_bytes: 0 });
     }
-    do_sh_file_op(paths, FILEOPERATION_FLAGS(FOF_ALLOWUNDO.0 | FOF_NOCONFIRMATION.0 | FOF_NOERRORUI.0 | FOF_SILENT.0))
+
+    let mut deleted = Vec::new();
+    let mut failed = Vec::new();
+    let mut total_bytes = 0u64;
+
+    for p in paths {
+        let abs = match std::path::absolute(p) {
+            Ok(a) => a,
+            Err(e) => {
+                failed.push(DeleteError { path: p.clone(), error: e.to_string() });
+                continue;
+            }
+        };
+
+        if !abs.exists() {
+            failed.push(DeleteError { path: p.clone(), error: "Path does not exist".to_string() });
+            continue;
+        }
+
+        // Get file size for statistics (files only, not directories)
+        if let Ok(metadata) = fs::metadata(&abs) {
+            if metadata.is_file() { total_bytes += metadata.len(); }
+        }
+
+        // Use cross-platform trash crate
+        match trash::delete(&abs) {
+            Ok(_) => deleted.push(p.clone()),
+            Err(e) => failed.push(DeleteError { path: p.clone(), error: e.to_string() }),
+        }
+    }
+
+    Ok(DeleteResult { deleted, failed, total_bytes })
 }
 
-/// Permanently delete files/directories (bypass Recycle Bin)
+/// Permanently delete files/directories (bypass trash/recycle bin)
 pub fn hard_delete(paths: &[String]) -> Result<DeleteResult> {
     if paths.is_empty() {
         return Ok(DeleteResult { deleted: Vec::new(), failed: Vec::new(), total_bytes: 0 });
     }
-    
-    // Try SHFileOperation with FOF_WANTNUKE first
-    match do_sh_file_op(paths, FILEOPERATION_FLAGS(FOF_WANTNUKE | FOF_NOCONFIRMATION.0 | FOF_NOERRORUI.0 | FOF_SILENT.0)) {
-        Ok(result) => Ok(result),
-        Err(_) => hard_delete_fallback(paths),
-    }
-}
 
-fn do_sh_file_op(paths: &[String], flags: FILEOPERATION_FLAGS) -> Result<DeleteResult> {
-    // Build double-null-terminated string list in UTF-16
-    let mut from = Vec::new();
+    let mut deleted = Vec::new();
+    let mut failed = Vec::new();
     let mut total_bytes = 0u64;
-    let mut valid_paths = Vec::new();
 
     for p in paths {
-        let abs = std::path::absolute(p)?;
-        // Check existence
-        if !abs.exists() { continue; }
+        let abs = match std::path::absolute(p) {
+            Ok(a) => a,
+            Err(e) => {
+                failed.push(DeleteError { path: p.clone(), error: e.to_string() });
+                continue;
+            }
+        };
+
+        if !abs.exists() {
+            failed.push(DeleteError { path: p.clone(), error: "Path does not exist".to_string() });
+            continue;
+        }
+
         // Get file size for statistics (files only, not directories)
-        if let Ok(metadata) = std::fs::metadata(&abs) {
+        if let Ok(metadata) = fs::metadata(&abs) {
             if metadata.is_file() { total_bytes += metadata.len(); }
         }
-        // Convert to wide string
-        let abs_str = abs.to_string_lossy().to_string(); // Convert to owned String
-        let wide: Vec<u16> = OsStr::new(&abs_str).encode_wide().chain(Some(0)).collect();
-        from.extend(wide);
-        valid_paths.push(abs_str);
-    }
 
-    if from.is_empty() {
-        return Ok(DeleteResult { deleted: Vec::new(), failed: Vec::new(), total_bytes: 0 });
-    }
+        // Direct deletion
+        let result = if abs.is_dir() {
+            fs::remove_dir_all(&abs)
+        } else {
+            fs::remove_file(&abs)
+        };
 
-    // Add final null terminator
-    from.push(0);
-
-    let mut fileop = windows::Win32::UI::Shell::SHFILEOPSTRUCTW {
-        hwnd: HWND(std::ptr::null_mut()),
-        wFunc: FO_DELETE,
-        pFrom: PCWSTR(from.as_ptr()),
-        pTo: PCWSTR::null(),
-        fFlags: flags.0 as u16, // FILEOPERATION_FLAGS stores u32, but fFlags is u16
-        fAnyOperationsAborted: BOOL(0),
-        hNameMappings: std::ptr::null_mut(),
-        lpszProgressTitle: PCWSTR::null(),
-    };
-
-    let result = unsafe { SHFileOperationW(&mut fileop) };
-    
-    if result != 0 {
-        return Err(anyhow::anyhow!("SHFileOperation failed with code {}", result));
-    }
-
-    Ok(DeleteResult { deleted: valid_paths, failed: Vec::new(), total_bytes })
-}
-
-/// Fallback: manual deletion using std::fs::remove_dir_all / remove_file
-fn hard_delete_fallback(paths: &[String]) -> Result<DeleteResult> {
-    use std::sync::{Arc, Mutex};
-
-    let deleted = Arc::new(Mutex::new(Vec::new()));
-    let failed = Arc::new(Mutex::new(Vec::new()));
-    let total_bytes = Arc::new(Mutex::new(0u64));
-
-    std::thread::scope(|s| {
-        for p in paths {
-            let abs = match std::path::absolute(p) {
-                Ok(a) => a,
-                Err(e) => {
-                    failed.lock().unwrap().push(DeleteError { path: p.clone(), error: e.to_string() });
-                    continue;
-                }
-            };
-
-            let deleted = deleted.clone();
-            let failed = failed.clone();
-            let total_bytes = total_bytes.clone();
-            let p_clone = p.clone();
-
-            s.spawn(move || {
-                if let Ok(metadata) = std::fs::metadata(&abs) {
-                    if metadata.is_file() {
-                        *total_bytes.lock().unwrap() += metadata.len();
-                    }
-                }
-
-                let result = if abs.is_dir() {
-                    std::fs::remove_dir_all(&abs)
-                } else {
-                    std::fs::remove_file(&abs)
-                };
-
-                match result {
-                    Ok(_) => deleted.lock().unwrap().push(p_clone),
-                    Err(e) => failed.lock().unwrap().push(DeleteError { path: p_clone, error: e.to_string() }),
-                }
-            });
+        match result {
+            Ok(_) => deleted.push(p.clone()),
+            Err(e) => failed.push(DeleteError { path: p.clone(), error: e.to_string() }),
         }
-    });
+    }
 
-    let total_bytes_val = *total_bytes.lock().unwrap();
-    Ok(DeleteResult {
-        deleted: Arc::try_unwrap(deleted).unwrap().into_inner().unwrap(),
-        failed: Arc::try_unwrap(failed).unwrap().into_inner().unwrap(),
-        total_bytes: total_bytes_val,
-    })
+    Ok(DeleteResult { deleted, failed, total_bytes })
 }
 
 #[cfg(test)]
@@ -167,5 +126,16 @@ mod tests {
 
         let paths = vec![file_path.to_string_lossy().to_string()];
         let _ = recycle_bin(&paths);
+    }
+
+    #[test]
+    fn test_hard_delete() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("test.txt");
+        File::create(&file_path).unwrap().write_all(b"test").unwrap();
+
+        let paths = vec![file_path.to_string_lossy().to_string()];
+        let result = hard_delete(&paths).unwrap();
+        assert_eq!(result.deleted.len(), 1);
     }
 }
