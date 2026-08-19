@@ -9,7 +9,8 @@ const Category = {
   OLD_LOG: 'old_log',
   STALE_INSTALL: 'stale_install',
   STALE: 'stale',
-  DUPLICATE: 'duplicate'
+  DUPLICATE: 'duplicate',
+  APP_LEFTOVERS: 'app_leftovers'
 };
 
 const Risk = {
@@ -36,6 +37,49 @@ const state = {
 // ===== DOM Elements =====
 const els = {};
 
+// ===== Animation Helpers =====
+function animatePhaseTransition(fromEl, toEl, callback) {
+  const prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (prefersReduced || !fromEl) {
+    fromEl?.classList.add('hidden');
+    toEl.classList.remove('hidden');
+    callback?.();
+    return;
+  }
+
+  fromEl.classList.add('exiting');
+  fromEl.addEventListener('animationend', function handler() {
+    fromEl.removeEventListener('animationend', handler);
+    fromEl.classList.add('hidden');
+    fromEl.classList.remove('exiting');
+    toEl.classList.remove('hidden');
+    toEl.classList.add('entering');
+    toEl.addEventListener('animationend', function handler2() {
+      toEl.removeEventListener('animationend', handler2);
+      toEl.classList.remove('entering');
+      callback?.();
+    }, { once: true });
+  }, { once: true });
+}
+
+function staggerChildren(container, selector, baseDelay = 30, staggerDelay = 20) {
+  const prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (prefersReduced) return;
+
+  const items = container.querySelectorAll(selector);
+  items.forEach((el, i) => {
+    el.style.animationDelay = `${baseDelay + i * staggerDelay}ms`;
+  });
+}
+
+function triggerRowAnimations(tbody) {
+  staggerChildren(tbody, 'tr', 0, 15);
+}
+
+function triggerStatAnimations() {
+  staggerChildren(document.querySelector('.progress-stats-grid') || document.body, '.stat-item', 50, 50);
+}
+
 // ===== Utility Functions =====
 function formatBytes(bytes) {
   const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB'];
@@ -60,7 +104,8 @@ function categoryLabel(cat) {
   const labels = {
     huge: 'Очень крупные', large: 'Крупные', junk: 'Мусор',
     old_log: 'Старые логи', stale_install: 'Старые инсталляторы',
-    stale: 'Не использовались', duplicate: 'Дубликаты'
+    stale: 'Не использовались', duplicate: 'Дубликаты',
+    app_leftovers: 'Следы приложений'
   };
   return labels[cat] || cat;
 }
@@ -81,9 +126,7 @@ const ICON_PATHS = {
   check_circle: '<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>',
   alert: '<path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
   octagon: '<polygon points="7.86 2 16.14 2 22 7.86 22 16.14 16.14 22 7.86 22 2 16.14 2 7.86 7.86 2"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>',
-  search: '<circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>',
-  folder_plus: '<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/>',
-  x: '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>',
+  app_leftovers: '<path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 17h-2v-2h2v2zm2.07-7.75l-1.29 1.29-2.58-2.58-1.29 1.29L11 15.67l-2.58-2.58-1.29 1.29L11 18.16l4.77-4.77 1.29 1.29L14.54 14z"/>',
 };
 
 function iconSvg(name, size = 16, cls = '') {
@@ -103,6 +146,10 @@ function riskLabel(risk) {
 function riskColor(risk) {
   const colors = { safe: '#22c55e', caution: '#f59e0b', protected: '#ef4444' };
   return colors[risk] || '#6b7280';
+}
+
+function riskClass(risk) {
+  return `risk-${risk}`;
 }
 
 function escapeHtml(text) {
@@ -175,6 +222,7 @@ function cacheElements() {
   // Progress phase
   els.progressSection = document.getElementById('progress-phase');
   els.resultsSection = document.getElementById('results-phase');
+  els.configSection = document.getElementById('config-phase');
   els.progressRingFill = document.querySelector('#progress-ring-fill');
   els.progressPercent = document.getElementById('progress-percent');
   els.statFiles = document.getElementById('stat-files');
@@ -191,6 +239,7 @@ function cacheElements() {
   els.filterCategory = document.getElementById('filter-category');
   els.filterSearch = document.getElementById('filter-search');
   els.resultsBody = document.getElementById('results-body');
+  els.tableWrapper = document.querySelector('.table-wrapper');
   els.selectAll = document.getElementById('select-all');
   els.selCount = document.getElementById('sel-count');
   els.selSize = document.getElementById('sel-size');
@@ -216,7 +265,9 @@ function cacheElements() {
 
 function bindEvents() {
   els.rootSelect.addEventListener('change', () => {
-    els.rootCustom.style.display = els.rootSelect.value === 'custom' ? 'block' : 'none';
+    const show = els.rootSelect.value === 'custom';
+    els.rootCustom.style.display = show ? 'block' : 'none';
+    if (show) els.rootCustom.focus();
   });
 
   els.btnScan.addEventListener('click', startScan);
@@ -264,6 +315,13 @@ function bindEvents() {
       else if (state.phase === 'scanning') stopScan();
     }
   });
+
+  // Button press feedback
+  document.querySelectorAll('.btn').forEach(btn => {
+    btn.addEventListener('mousedown', () => { if (!btn.disabled) btn.style.transform = 'scale(0.98)'; });
+    btn.addEventListener('mouseup', () => { if (!btn.disabled) btn.style.transform = ''; });
+    btn.addEventListener('mouseleave', () => { btn.style.transform = ''; });
+  });
 }
 
 async function loadConfig() {
@@ -275,7 +333,6 @@ async function loadConfig() {
     els.checkDuplicates.checked = cfg.check_duplicates ?? false;
     els.protectSystem.checked = cfg.protect_system ?? true;
 
-    // Populate drives / root paths according to OS
     populateRootPaths(cfg);
   } catch (e) {
     console.warn('Config load failed:', e);
@@ -284,22 +341,20 @@ async function loadConfig() {
 }
 
 function populateRootPaths(cfg) {
-  const paths = cfg.default_paths && cfg.default_paths.length > 0 
-    ? cfg.default_paths 
+  const paths = cfg.default_paths && cfg.default_paths.length > 0
+    ? cfg.default_paths
     : (cfg.os === 'macos' || cfg.os === 'linux' ? ['/', '.'] : ['C:\\', 'D:\\']);
 
   els.rootSelect.innerHTML = paths.map(p => `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`).join('');
-  
+
   const opt = document.createElement('option');
   opt.value = 'custom';
-  opt.textContent = 'Указать свой путь...';
+  opt.textContent = 'Указать свой путь…';
   els.rootSelect.appendChild(opt);
 
-  // If configured root is valid and in the list, select it
   if (cfg.root && paths.includes(cfg.root)) {
     els.rootSelect.value = cfg.root;
   } else if (cfg.root && cfg.root !== 'C:\\') {
-    // If it's a custom path, switch to custom input
     els.rootSelect.value = 'custom';
     els.rootCustom.hidden = false;
     els.rootCustom.value = cfg.root;
@@ -312,12 +367,13 @@ function detectDrivesFallback() {
   els.rootSelect.innerHTML = defaults.map(d => `<option value="${d}">${d}</option>`).join('');
   const opt = document.createElement('option');
   opt.value = 'custom';
-  opt.textContent = 'Указать свой путь...';
+  opt.textContent = 'Указать свой путь…';
   els.rootSelect.appendChild(opt);
 }
 
 // ===== Phase Management =====
 function setPhase(phase) {
+  const prevPhase = state.phase;
   state.phase = phase;
   const isScanning = phase === 'scanning';
   const isResults = phase === 'results';
@@ -326,17 +382,36 @@ function setPhase(phase) {
   els.btnScan.disabled = isScanning || isDeleting;
   els.btnStop.disabled = !isScanning;
   if (els.btnStopProgress) els.btnStopProgress.disabled = !isScanning;
-  els.progressSection.classList.toggle('hidden', !isScanning && !isDeleting);
-  els.resultsSection.classList.toggle('hidden', !isResults);
+
+  const sections = {
+    config: els.configSection,
+    scanning: els.progressSection,
+    results: els.resultsSection
+  };
+
+  const prevSection = sections[prevPhase];
+  const nextSection = sections[phase];
+
+  if (prevSection && nextSection && prevSection !== nextSection) {
+    animatePhaseTransition(prevSection, nextSection);
+  } else {
+    Object.values(sections).forEach(s => s?.classList.add('hidden'));
+    nextSection?.classList.remove('hidden');
+  }
 
   if (isScanning) {
     const ring = els.progressRingFill;
     if (ring) {
-      const CIRC = 2 * Math.PI * 54;
+      const CIRC = 2 * Math.PI * 49;
       ring.style.strokeDasharray = String(CIRC);
       ring.style.strokeDashoffset = String(CIRC);
     }
     if (els.progressPercent) els.progressPercent.textContent = '0';
+    triggerStatAnimations();
+  }
+
+  if (isResults) {
+    triggerRowAnimations(els.resultsBody);
   }
 }
 
@@ -354,7 +429,6 @@ async function startScan() {
     protect_system: els.protectSystem.checked
   };
 
-  // Save config (non-blocking; extra UI fields must not break scan)
   api.saveConfig(config).catch(e => console.warn('Config save failed:', e));
 
   setPhase('scanning');
@@ -397,6 +471,8 @@ function pollProgress() {
   });
 }
 
+let lastRecentPaths = new Set();
+
 function updateProgress(p) {
   els.statFiles.textContent = formatNumber(p.files);
   els.statDirs.textContent = formatNumber(p.dirs);
@@ -410,7 +486,7 @@ function updateProgress(p) {
 
   const ring = els.progressRingFill;
   if (ring) {
-    const CIRC = 2 * Math.PI * 54;
+    const CIRC = 2 * Math.PI * 49;
     ring.style.strokeDasharray = String(CIRC);
     if (p.finished) { ring.style.strokeDashoffset = '0'; els.progressPercent.textContent = '100'; }
     else if (p.percent >= 0) {
@@ -435,7 +511,15 @@ function updateRecentFiles(recent) {
   const el = els.recentFiles;
   if (!el) return;
   if (recent.length === 0) { el.innerHTML = '<span class="recent-empty">Ещё нет файлов…</span>'; return; }
-  el.innerHTML = recent.slice(-30).reverse().map(p => `<div class="recent-file">${escapeHtml(p)}</div>`).join('');
+
+  const newPaths = recent.slice(-30).reverse();
+  const fragments = newPaths.map((p, i) => {
+    const isNew = !lastRecentPaths.has(p);
+    if (isNew) lastRecentPaths.add(p);
+    return `<div class="recent-file${isNew ? ' new' : ''}" style="animation-delay: ${i * 30}ms">${escapeHtml(p)}</div>`;
+  }).join('');
+
+  el.innerHTML = fragments;
 }
 
 // ===== Results Phase =====
@@ -445,6 +529,7 @@ async function loadResults() {
     state.findings = res.items;
     state.filteredFindings = [...res.items];
     state.currentPage = 1;
+    lastRecentPaths.clear();
     renderTable();
     updateSummary();
     setPhase('results');
@@ -506,11 +591,11 @@ function renderTable() {
   const pageItems = state.filteredFindings.slice(start, end);
 
   els.resultsBody.innerHTML = pageItems.map((f, i) => {
-    const globalIdx = start + i;
     const checked = state.selectedPaths.has(f.path) ? 'checked' : '';
     const risk = f.risk;
+    const selectedClass = state.selectedPaths.has(f.path) ? ' selected' : '';
     return `
-<tr data-path="${escapeHtml(f.path)}" style="--risk-color: ${riskColor(risk)}">
+<tr data-path="${escapeHtml(f.path)}" class="${selectedClass}" style="--risk-color: ${riskColor(risk)}; animation-delay: ${i * 15}ms">
   <td><input type="checkbox" class="row-check" ${checked} data-path="${escapeHtml(f.path)}"></td>
   <td class="path-cell" title="${escapeHtml(f.path)}">
     <span class="file-icon">${categoryIcon(f.category)}</span>
@@ -519,7 +604,7 @@ function renderTable() {
   <td>${formatBytes(f.size)}</td>
   <td><span class="cat-badge cat-${f.category}">${categoryIcon(f.category)} ${categoryLabel(f.category)}</span></td>
   <td>${escapeHtml(f.reason)}</td>
-  <td><span class="risk-badge" style="background: ${riskColor(risk)}22; color: ${riskColor(risk)}; border-color: ${riskColor(risk)}44;">${riskLabel(risk)}</span></td>
+  <td><span class="risk-badge ${riskClass(risk)}">${riskLabel(risk)}</span></td>
   <td>${formatDate(f.mod_time)}</td>
 </tr>
 `;
@@ -531,6 +616,8 @@ function renderTable() {
       if (e.target.checked) state.selectedPaths.add(path);
       else state.selectedPaths.delete(path);
       updateSelectionUI();
+      const row = e.target.closest('tr');
+      if (row) row.classList.toggle('selected', e.target.checked);
     });
   });
 
@@ -548,6 +635,8 @@ function updatePagination() {
 function changePage(delta) {
   state.currentPage = clamp(state.currentPage + delta, 1, state.totalPages);
   renderTable();
+  // Scroll to table top smoothly
+  els.tableWrapper?.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
 function toggleSelectAll(e) {
@@ -611,7 +700,7 @@ function confirmDelete(mode) {
     return sum + (f?.size || 0);
   }, 0);
   els.modalText.innerHTML = `
-Удалить <strong>${formatNumber(state.selectedPaths.size)}</strong> файлов 
+Удалить <strong>${formatNumber(state.selectedPaths.size)}</strong> файлов
 (<strong>${formatBytes(totalSize)}</strong>)?<br><br>
 ${isHard ? iconSvg('alert', 16, 'modal-icon danger') + ' <strong>Это действие НЕОБРАТИМО!</strong> Файлы не попадут в Корзину.' : iconSvg('check_circle', 16, 'modal-icon success') + ' Файлы можно будет восстановить из Корзины.'}
   `;
@@ -622,7 +711,16 @@ ${isHard ? iconSvg('alert', 16, 'modal-icon danger') + ' <strong>Это дейс
 }
 
 function hideModal() {
-  els.modal.classList.add('hidden');
+  const prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (!prefersReduced) {
+    els.modal.classList.add('exiting');
+    els.modal.addEventListener('animationend', () => {
+      els.modal.classList.add('hidden');
+      els.modal.classList.remove('exiting');
+    }, { once: true });
+  } else {
+    els.modal.classList.add('hidden');
+  }
   state.pendingDeleteMode = null;
 }
 
@@ -665,8 +763,14 @@ function showToast(message, type = 'info') {
   toast.className = `toast toast-${type}`;
   toast.textContent = message;
   container.appendChild(toast);
+
+  // Trigger entrance animation
   requestAnimationFrame(() => toast.classList.add('show'));
-  setTimeout(() => { toast.classList.remove('show'); setTimeout(() => toast.remove(), 300); }, 3000);
+
+  setTimeout(() => {
+    toast.classList.add('leaving');
+    toast.addEventListener('animationend', () => toast.remove(), { once: true });
+  }, 3000);
 }
 
 // ===== Start =====
