@@ -1,0 +1,355 @@
+//! CLI command implementations
+
+use std::time::Instant;
+use std::path::Path;
+use anyhow::Result;
+use indicatif::{ProgressBar, ProgressStyle, MultiProgress};
+use colored::*;
+use rayon::prelude::*;
+use tempfile;
+
+use crate::config::Config;
+use crate::scanner::{Walker, Options, Progress as ScannerProgress, FileRecord, ScanError};
+use crate::cache::{Cache, BoltCache, config_hash as cache_config_hash};
+use crate::rules::{Engine, Finding, Category};
+
+/// Run scan command
+pub fn scan_cmd(
+    config: &Config,
+    json_out: Option<String>,
+    csv_out: Option<String>,
+    top: usize,
+) -> Result<()> {
+    println!("{}", "Scanning...".bold().cyan());
+    println!("  Root: {}", config.root.yellow());
+    println!("  Workers: {}", config.workers.to_string().yellow());
+
+    let start = Instant::now();
+
+    // Progress bar
+    let multi = MultiProgress::new();
+    let pb = multi.add(ProgressBar::new_spinner());
+    pb.set_style(
+        ProgressStyle::default_spinner()
+            .template("{spinner:.green} {msg}")
+            .unwrap()
+    );
+    pb.enable_steady_tick(std::time::Duration::from_millis(100));
+
+    let progress = std::sync::Arc::new(ScannerProgress::new());
+    let progress_clone = progress.clone();
+
+    // Spawn progress updater
+    let progress_handle = std::thread::spawn(move || {
+        let mut last_files = 0u64;
+        loop {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            let snap = progress_clone.snapshot();
+            if snap.finished {
+                break;
+            }
+            let msg = format!(
+                "{} files, {} · {:.0} files/s",
+                format_number(snap.files),
+                format_bytes(snap.bytes as u64),
+                snap.rate_fps
+            );
+            if snap.cached > 0 {
+                pb.set_message(format!("{} · {} from cache", msg, format_number(snap.cached)));
+            } else {
+                pb.set_message(msg);
+            }
+            last_files = snap.files as u64;
+        }
+    });
+
+    // Scanner options
+    let opts = Options {
+        workers: config.workers,
+        follow_links: config.follow_links,
+        exclude: config.exclude_dirs.clone(),
+        exclude_pref: config.exclude_prefix.clone(),
+    };
+
+    // Cache
+    let cache: Option<Arc<dyn Cache>> = if config.use_cache {
+        let hash = cache_config_hash(&opts);
+        BoltCache::new("unused-removal", &hash).ok().map(Arc::new)
+    } else {
+        None
+    };
+
+    let walker = Walker::new(opts, progress.clone(), cache);
+    
+    // Run scan in blocking task
+    let (records, errors) = walker.walk(&config.root)?;
+    
+    pb.finish_and_clear();
+    progress_handle.join().unwrap();
+
+    println!("\n{}", "Analyzing...".bold().cyan());
+    
+    // Rules engine
+    let engine = Engine::new(std::sync::Arc::new(config.clone()));
+    let mut findings = engine.analyze(&records);
+    
+    if config.check_duplicates {
+        let dups = engine.find_duplicates(&records);
+        findings.extend(dups);
+    }
+    
+    // Sort by size descending
+    findings.sort_by(|a, b| b.size.cmp(&a.size));
+
+    let elapsed = start.elapsed().as_secs_f64();
+    println!(
+        "\n{} {:.2}s. Files: {}, Findings: {}, Errors: {}",
+        "Done in".green(),
+        elapsed,
+        format_number(records.len() as i64),
+        findings.len(),
+        errors.len()
+    );
+
+    // Print summary
+    print_summary(&findings);
+    
+    if top > 0 {
+        print_top(&findings, top);
+    }
+
+    // Export
+    if let Some(path) = json_out {
+        write_json(&path, &findings)?;
+        println!("\n{} JSON report saved to {}", "✓".green(), path);
+    }
+    if let Some(path) = csv_out {
+        write_csv(&path, &findings)?;
+        println!("{} CSV report saved to {}", "✓".green(), path);
+    }
+
+    Ok(())
+}
+
+/// Run benchmark
+pub fn bench_cmd(config: &Config, files: usize, depth: usize, serial: bool) -> Result<()> {
+    println!("{}", format!("Benchmark: {} files, depth {}", files, depth).bold().cyan());
+
+    // Create test fixture
+    let tmp_dir = tempfile::tempdir()?;
+    println!("Creating fixture...");
+    let fixture_start = Instant::now();
+    create_fixture(tmp_dir.path(), files, depth)?;
+    println!("Fixture created in {:.2}s", fixture_start.elapsed().as_secs_f64());
+
+    let mut cfg = config.clone();
+    cfg.root = tmp_dir.path().to_string_lossy().to_string();
+    cfg.workers = num_cpus::get();
+    cfg.use_cache = false;
+
+    let opts = Options {
+        workers: cfg.workers,
+        follow_links: cfg.follow_links,
+        exclude: cfg.exclude_dirs.clone(),
+        exclude_pref: cfg.exclude_prefix.clone(),
+    };
+
+    // Parallel scan
+    let progress = std::sync::Arc::new(ScannerProgress::new());
+    let walker = Walker::new(opts.clone(), progress, None);
+    
+    let start = Instant::now();
+    let (records, _) = walker.walk(&cfg.root)?;
+    let par_time = start.elapsed();
+    
+    println!(
+        "Parallel: {:.2}s, {} files, {:.0} files/s",
+        par_time.as_secs_f64(),
+        records.len(),
+        records.len() as f64 / par_time.as_secs_f64()
+    );
+
+    // Serial scan for comparison
+    if serial {
+        cfg.workers = 1;
+        let opts_serial = Options { workers: 1, ..opts };
+        let progress2 = std::sync::Arc::new(ScannerProgress::new());
+        let walker2 = Walker::new(opts_serial, progress2, None);
+        
+        let start = Instant::now();
+        let (records2, _) = walker2.walk(&cfg.root)?;
+        let ser_time = start.elapsed();
+        
+        println!(
+            "Serial: {:.2}s, {} files, {:.0} files/s",
+            ser_time.as_secs_f64(),
+            records2.len(),
+            records2.len() as f64 / ser_time.as_secs_f64()
+        );
+        
+        if ser_time > par_time {
+            let speedup = ser_time.as_secs_f64() / par_time.as_secs_f64();
+            println!("Speedup: {:.2}x", speedup);
+        }
+    }
+
+    Ok(())
+}
+
+/// Show configuration
+pub fn config_cmd(config: &Config) -> Result<()> {
+    let json = serde_json::to_string_pretty(config)?;
+    println!("{}", json);
+    Ok(())
+}
+
+fn print_summary(findings: &[Finding]) {
+    use std::collections::HashMap;
+    
+    let mut by_cat: HashMap<Category, (usize, u64)> = HashMap::new();
+    for f in findings {
+        let entry = by_cat.entry(f.category).or_insert((0, 0));
+        entry.0 += 1;
+        entry.1 += f.size as u64;
+    }
+
+    println!("\n{}", "Summary by category:".bold());
+    println!("{:<20} {:>8} {:>12}", "Category", "Count", "Size");
+    println!("{}", "─".repeat(42));
+    
+    let order = [
+        Category::Huge,
+        Category::Large,
+        Category::Junk,
+        Category::OldLog,
+        Category::StaleInstall,
+        Category::Stale,
+        Category::Duplicate,
+    ];
+    
+    for cat in order {
+        if let Some((count, size)) = by_cat.get(&cat) {
+            let icon = category_icon(cat);
+            println!("{} {:<18} {:>8} {:>12}", icon, format!("{:?}", cat), count, format_bytes(*size));
+        }
+    }
+}
+
+fn print_top(findings: &[Finding], n: usize) {
+    println!("\n{}", format!("Top {} largest:", n.min(findings.len())).bold());
+    for (i, f) in findings.iter().take(n).enumerate() {
+        let icon = category_icon(f.category);
+        let risk_color = match f.risk {
+            crate::rules::Risk::Safe => "green",
+            crate::rules::Risk::Caution => "yellow",
+            crate::rules::Risk::Protected => "red",
+        };
+        println!(
+            "  {}. {} {:>10}  {}",
+            i + 1,
+            icon,
+            format_bytes(f.size as u64).color(risk_color),
+            f.path.dimmed()
+        );
+    }
+}
+
+fn category_icon(cat: Category) -> &'static str {
+    match cat {
+        Category::Huge => "🔴",
+        Category::Large => "🟠",
+        Category::Junk => "🗑",
+        Category::OldLog => "📄",
+        Category::StaleInstall => "📦",
+        Category::Stale => "⏳",
+        Category::Duplicate => "🔁",
+    }
+}
+
+fn format_bytes(bytes: u64) -> String {
+    const UNIT: u64 = 1024;
+    if bytes < UNIT {
+        return format!("{} B", bytes);
+    }
+    let mut div = UNIT;
+    let mut exp = 0;
+    let mut n = bytes / UNIT;
+    while n >= UNIT {
+        div *= UNIT;
+        exp += 1;
+        n /= UNIT;
+    }
+    format!("{:.1} {}iB", bytes as f64 / div as f64, "KMGTPE".chars().nth(exp).unwrap())
+}
+
+fn format_number(n: i64) -> String {
+    let s = n.to_string();
+    let mut result = String::new();
+    for (i, ch) in s.chars().rev().enumerate() {
+        if i > 0 && i % 3 == 0 {
+            result.push(' ');
+        }
+        result.push(ch);
+    }
+    result.chars().rev().collect()
+}
+
+fn write_json(path: &str, findings: &[Finding]) -> Result<()> {
+    let json = serde_json::to_string_pretty(findings)?;
+    std::fs::write(path, json)?;
+    Ok(())
+}
+
+fn write_csv(path: &str, findings: &[Finding]) -> Result<()> {
+    let mut csv = String::new();
+    csv.push_str("path,size_bytes,category,reason,risk,mod_time\n");
+    for f in findings {
+        let mod_time: chrono::DateTime<chrono::Utc> = f.mod_time.into();
+        csv.push_str(&format!(
+            "{},{},{},{},{},{}\n",
+            escape_csv(&f.path),
+            f.size,
+            f.category,
+            escape_csv(&f.reason),
+            format!("{:?}", f.risk),
+            mod_time.to_rfc3339()
+        ));
+    }
+    std::fs::write(path, csv)?;
+    Ok(())
+}
+
+fn escape_csv(s: &str) -> String {
+    if s.contains(',') || s.contains('"') || s.contains('\n') {
+        format!("\"{}\"", s.replace('"', "\"\""))
+    } else {
+        s.to_string()
+    }
+}
+
+/// Create test fixture for benchmarking
+fn create_fixture(root: &Path, total_files: usize, depth: usize) -> Result<()> {
+    let files_per_dir = (total_files / 100).max(1);
+    let dirs = (total_files / files_per_dir).max(1);
+    
+    fn create_dir_recursive(path: &Path, current_depth: usize, max_depth: usize, files_per_dir: usize) -> Result<()> {
+        if current_depth >= max_depth {
+            return Ok(());
+        }
+        
+        for i in 0..10 {
+            let subdir = path.join(format!("dir_{}_{}", current_depth, i));
+            std::fs::create_dir_all(&subdir)?;
+            
+            for j in 0..files_per_dir {
+                let file = subdir.join(format!("file_{}_{}.tmp", current_depth, j));
+                std::fs::write(&file, vec![b'x'; 1024])?;
+            }
+            
+            create_dir_recursive(&subdir, current_depth + 1, max_depth, files_per_dir)?;
+        }
+        Ok(())
+    }
+    
+    create_dir_recursive(root, 0, depth, files_per_dir)
+}

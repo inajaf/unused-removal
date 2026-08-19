@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>unused-removal — Поиск и удаление ненужных файлов</title>
+<link rel="stylesheet" href="/style.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+<div class="app">
+<header class="header">
+<div class="header-content">
+<div class="brand">
+<div class="brand-icon" aria-hidden="true">🗂</div>
+<div>
+<h1>unused-removal</h1>
+<p class="subtitle">Быстрый поиск и удаление ненужных файлов</p>
+</div>
+</div>
+<div class="header-actions">
+<span class="version-badge">v1.0.0</span>
+</div>
+</div>
+</header>
+
+<main class="main">
+<!-- Phase 1: Configuration -->
+<section id="config-phase" class="panel phase-panel" data-phase="config">
+<header class="panel-header">
+<h2><span class="step-number">1</span> Настройка сканирования</h2>
+<p class="panel-desc">Выберите диск или папку и настройте параметры поиска</p>
+</header>
+
+<div class="form-grid">
+<div class="form-field">
+<label for="root-select">Корневой путь <span class="required">*</span></label>
+<div class="select-wrapper">
+<select id="root-select">
+<!-- populated by JS -->
+</select>
+</div>
+<input type="text" id="root-custom" class="custom-path" placeholder="Например: D:\Projects или \\server\share" hidden>
+</div>
+
+<div class="form-field">
+<label for="workers">Потоки сканирования</label>
+<input type="number" id="workers" value="0" min="1" max="64" step="1">
+<small class="field-hint">0 = авто (все ядра CPU)</small>
+</div>
+
+<div class="form-field checkbox-group">
+<label class="checkbox-label">
+<input type="checkbox" id="follow-links">
+<span class="checkmark"></span>
+Следовать за junction / symlink
+</label>
+<small class="field-hint">Может вызвать зацикливание, используйте с осторожностью</small>
+</div>
+
+<div class="form-field checkbox-group">
+<label class="checkbox-label">
+<input type="checkbox" id="use-cache" checked>
+<span class="checkmark"></span>
+Инкрементальный кэш
+</label>
+<small class="field-hint">Повторные сканы будут в разы быстрее</small>
+</div>
+
+<div class="form-field checkbox-group">
+<label class="checkbox-label">
+<input type="checkbox" id="check-duplicates">
+<span class="checkmark"></span>
+Поиск дубликатов
+</label>
+<small class="field-hint">Медленно: хэширует файлы одинакового размера</small>
+</div>
+
+<div class="form-field checkbox-group">
+<label class="checkbox-label">
+<input type="checkbox" id="protect-system" checked>
+<span class="checkmark"></span>
+Защита системных путей
+</label>
+<small class="field-hint">Windows, Program Files и критичные файлы не будут предложены к удалению</small>
+</div>
+</div>
+
+<div class="form-actions">
+<button id="btn-scan" class="btn btn-primary btn-lg">
+<svg class="btn-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+<span>Начать сканирование</span>
+</button>
+<button id="btn-stop" class="btn btn-secondary btn-lg" disabled>
+<svg class="btn-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+<span>Остановить</span>
+</button>
+</div>
+</section>
+
+<!-- Phase 2: Progress -->
+<section id="progress-phase" class="panel phase-panel hidden" data-phase="scanning">
+<header class="panel-header">
+<h2><span class="step-number">2</span> Сканирование...</h2>
+<p class="panel-desc" id="progress-desc">Обход файловой системы...</p>
+</header>
+
+<div class="progress-card">
+<div class="progress-ring" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">
+<svg class="progress-ring-svg" viewBox="0 0 120 120">
+<defs>
+<linearGradient id="ringGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+<stop offset="0%" stop-color="#6366f1"/>
+<stop offset="100%" stop-color="#a855f7"/>
+</linearGradient>
+</defs>
+<circle class="progress-ring-bg" cx="60" cy="60" r="54" fill="none" stroke-width="8"/>
+<circle id="progress-ring-fill" class="progress-ring-fill" cx="60" cy="60" r="54" fill="none" stroke-width="8" stroke-linecap="round" stroke-dasharray="339" stroke-dashoffset="339"/>
+</svg>
+<div class="progress-ring-text">
+<span id="progress-percent">0</span><span class="progress-percent-label">%</span>
+</div>
+</div>
+
+<div class="progress-stats-grid">
+<div class="stat-item">
+<span class="stat-value" id="stat-files">0</span>
+<span class="stat-label">файлов</span>
+</div>
+<div class="stat-item">
+<span class="stat-value" id="stat-dirs">0</span>
+<span class="stat-label">каталогов</span>
+</div>
+<div class="stat-item">
+<span class="stat-value" id="stat-bytes">0 B</span>
+<span class="stat-label">обработано</span>
+</div>
+<div class="stat-item">
+<span class="stat-value" id="stat-rate">—</span>
+<span class="stat-label">файлов/с</span>
+</div>
+<div class="stat-item">
+<span class="stat-value" id="stat-elapsed">0.0 с</span>
+<span class="stat-label">время / осталось</span>
+</div>
+<div class="stat-item">
+<span class="stat-value" id="stat-cached">0</span>
+<span class="stat-label">из кэша</span>
+</div>
+</div>
+
+<div class="current-path" id="stat-current">
+<svg class="icon-sm" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 19V5a2 2 0 0 0-2-2H9l-4 4H3a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2z"/><path d="M18 13h-8"/><path d="M18 17h-8"/></svg>
+<span>Готовность...</span>
+</div>
+
+<div class="recent-panel">
+<header class="recent-header">
+<svg class="icon-sm" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+<span>Последние обработанные файлы</span>
+</header>
+<div id="recent-files" class="recent-files"></div>
+</div>
+</div>
+
+<div class="progress-actions">
+<button id="btn-stop-progress" class="btn btn-secondary">
+<svg class="btn-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+<span>Остановить сканирование</span>
+</button>
+</div>
+</section>
+
+<!-- Phase 3: Results -->
+<section id="results-phase" class="panel phase-panel hidden" data-phase="results">
+<header class="panel-header">
+<h2><span class="step-number">3</span> Результаты</h2>
+<p class="panel-desc">Найдено <strong id="summary-total">0</strong> находок (<span id="summary-cats">—</span>)</p>
+</header>
+
+<div class="results-toolbar">
+<div class="toolbar-filters">
+<div class="filter-group">
+<label for="filter-category" class="visually-hidden">Категория</label>
+<select id="filter-category">
+<option value="">📂 Все категории</option>
+<option value="huge">🔴 Очень крупные</option>
+<option value="large">🟠 Крупные</option>
+<option value="junk">🗑 Мусор</option>
+<option value="old_log">📄 Старые логи</option>
+<option value="stale_install">📦 Старые инсталляторы</option>
+<option value="stale">⏳ Не использовались давно</option>
+<option value="duplicate">🔁 Дубликаты</option>
+</select>
+</div>
+<div class="filter-group search-group">
+<label for="filter-search" class="visually-hidden">Поиск</label>
+<div class="search-wrapper">
+<svg class="search-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+<input type="text" id="filter-search" placeholder="Поиск по пути, имени или причине...">
+</div>
+</div>
+</div>
+
+<div class="selection-summary" id="selection-summary" hidden>
+<span class="sel-info">
+<strong id="sel-count">0</strong> выбрано, <strong id="sel-size">0 B</strong>
+</span>
+</div>
+</div>
+
+<div class="table-wrapper">
+<table id="results-table" class="results-table">
+<thead>
+<tr>
+<th scope="col" class="col-check" style="width: 48px;">
+<input type="checkbox" id="select-all" class="select-all-checkbox" aria-label="Выбрать все видимые">
+</th>
+<th scope="col" class="col-path sortable" data-sort="path">Файл<span class="sort-label"></span></th>
+<th scope="col" class="col-size sortable" data-sort="size" style="width: 110px;">Размер<span class="sort-label"></span></th>
+<th scope="col" class="col-category sortable" data-sort="category" style="width: 150px;">Категория<span class="sort-label"></span></th>
+<th scope="col" class="col-reason">Причина</th>
+<th scope="col" class="col-risk sortable" data-sort="risk" style="width: 130px;">Риск<span class="sort-label"></span></th>
+<th scope="col" class="col-date sortable" data-sort="mod_time" style="width: 160px;">Изменён<span class="sort-label"></span></th>
+</tr>
+</thead>
+<tbody id="results-body"></tbody>
+</table>
+</div>
+
+<div class="table-footer">
+<div class="pagination" id="pagination">
+<button id="btn-prev" class="btn btn-sm btn-secondary" disabled aria-label="Предыдущая страница">
+<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+</button>
+<span id="page-info" class="page-info">Стр. 1 / 1</span>
+<button id="btn-next" class="btn btn-sm btn-secondary" disabled aria-label="Следующая страница">
+<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+</button>
+</div>
+
+<div class="bulk-actions" id="bulk-actions" hidden>
+<button id="btn-recycle" class="btn btn-primary">
+<svg class="btn-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+<span>В Корзину</span>
+</button>
+<button id="btn-hard" class="btn btn-danger">
+<svg class="btn-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="14" y2="15"/><line x1="14" y1="11" x2="10" y2="15"/></svg>
+<span>Безвозвратно</span>
+</button>
+<div class="export-divider"></div>
+<button id="btn-export-json" class="btn btn-ghost btn-sm" title="Экспорт JSON">
+<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+<span>JSON</span>
+</button>
+<button id="btn-export-csv" class="btn btn-ghost btn-sm" title="Экспорт CSV">
+<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><line x1="10" y1="9" x2="8" y2="9"/></svg>
+<span>CSV</span>
+</button>
+</div>
+</div>
+</section>
+</main>
+
+<footer class="footer">
+<div class="footer-content">
+<span>unused-removal — одиночный EXE, без зависимостей, open source</span>
+<span class="footer-sep">•</span>
+<span>Используйте на свой страх и риск. Всегда проверяйте список перед удалением.</span>
+</div>
+</footer>
+
+<!-- Modal -->
+<div id="modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+<div class="modal-overlay"></div>
+<div class="modal-content">
+<header class="modal-header">
+<h3 id="modal-title">Подтверждение</h3>
+<button class="modal-close" aria-label="Закрыть">
+<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+</button>
+</header>
+<div class="modal-body">
+<p id="modal-text"></p>
+</div>
+<footer class="modal-footer">
+<button id="modal-cancel" class="btn btn-secondary">Отмена</button>
+<button id="modal-confirm" class="btn btn-primary">Подтвердить</button>
+</footer>
+</div>
+</div>
+
+<!-- Toast container -->
+<div id="toast-container" class="toast-container" aria-live="polite"></div>
+
+<script type="module" src="/app.js"></script>
+</body>
+</html>

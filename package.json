@@ -1,0 +1,13 @@
+{
+  "name": "unused-removal-ui",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "tsc && esbuild dist/app.js --bundle --outfile=internal/ui/web/app.js --minify --target=es2020",
+    "dev": "tsc -w"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.0",
+    "esbuild": "^0.20.0"
+  }
+}

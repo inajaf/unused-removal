@@ -1,0 +1,82 @@
+[package]
+name = "unused-removal"
+version = "0.1.0"
+edition = "2021"
+description = "Sverkhbystroy poisk i bezopasnoye udalenie nuzhnykh faylov na Windows"
+license = "MIT"
+repository = "https://github.com/your/unused-removal"
+authors = ["Your Name <your@email.com>"]
+readme = "README.md"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+opt-level = "z"
+panic = "abort"
+
+[dependencies]
+# CLI
+clap = { version = "4.5", features = ["derive", "env", "cargo"] }
+console = "0.15"
+indicatif = "0.17"
+colored = "2.1"
+atty = "0.2"
+
+# TUI
+ratatui = "0.27"
+crossterm = "0.28"
+
+# Configuration
+toml = "0.8"
+serde = { version = "1.0", features = ["derive"] }
+dirs = "5.0"
+
+# Windows API
+windows = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_System_Console",
+    "Win32_Storage_FileSystem",
+    "Win32_UI_Shell",
+    "Win32_System_Threading",
+    "Win32_System_Com",
+    "Win32_System_Memory",
+    "Win32_System_SystemServices",
+    "Win32_Security",
+] }
+
+# Parallel processing
+rayon = "1.10"
+
+# Hashing for duplicates
+blake3 = "1.5"
+hex = "0.4"
+
+# Database for cache
+redb = "1.0"
+postcard = { version = "1.0", features = ["alloc", "use-std"] }
+
+# HTTP server
+axum = { version = "0.7", features = ["macros", "json", "ws"] }
+tokio = { version = "1.38", features = ["full", "rt-multi-thread", "signal"] }
+tower-http = { version = "0.5", features = ["cors", "fs", "trace", "compression-br"] }
+serde_json = "1.0"
+
+# Embedding static files
+rust-embed = { version = "8" }
+mime_guess = "2.0"
+open = "5.0"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "ansi"] }
+
+# Utilities
+anyhow = "1.0"
+thiserror = "1.0"
+uuid = { version = "1.7", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+walkdir = "2.5"
+scopeguard = "1.2"
+num_cpus = "1.16"
+tempfile = "3.10"
