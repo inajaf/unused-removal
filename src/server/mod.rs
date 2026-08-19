@@ -4,6 +4,7 @@ use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
+use std::str::FromStr;
 
 use axum::{
     extract::{Query, State},
@@ -19,7 +20,8 @@ use tokio::signal;
 use tracing::{info, error};
 
 use crate::config::Config;
-use crate::scanner::{Walker, Options, Progress, FileRecord, ScanError};
+use crate::scanner::{Walker, Progress};
+use crate::scanner_types::{Options, FileRecord, ScanError, ProgressSnapshot};
 use crate::cache::{Cache, BoltCache, config_hash as cache_config_hash};
 use crate::rules::{Engine, Finding, Category, Risk};
 use crate::cleaner::{recycle_bin, hard_delete, DeleteResult};
@@ -81,7 +83,7 @@ mod api {
 
     #[derive(Serialize)]
     pub struct ProgressResponse {
-        pub progress: crate::scanner::ProgressSnapshot,
+        pub progress: crate::ProgressSnapshot,
         pub done: bool,
     }
 
@@ -267,13 +269,14 @@ async fn handle_scan(
     let cfg_clone = cfg.clone();
     
     tokio::spawn(async move {
-        let recs_result = tokio::task::spawn_blocking(move || walker.walk(&root)).await;
+        let root_for_walk = root.clone();
+        let recs_result = tokio::task::spawn_blocking(move || walker.walk(&root_for_walk)).await;
         
         let (recs, errs) = match recs_result {
             Ok(Ok((r, e))) => (r, e),
             Ok(Err(e)) => {
                 error!("Scan error: {}", e);
-                (Vec::new(), vec![ScanError { path: root, error: e.to_string() }])
+                (Vec::new(), vec![ScanError { path: root.clone(), error: e.to_string() }])
             }
             Err(e) => {
                 error!("Scan task panicked: {}", e);
@@ -281,7 +284,7 @@ async fn handle_scan(
             }
         };
 
-        let engine = Engine::new(Arc::new(cfg_clone));
+        let engine = Engine::new(Arc::new(cfg_clone.clone()));
         let mut findings = engine.analyze(&recs);
         
         if cfg_clone.check_duplicates {

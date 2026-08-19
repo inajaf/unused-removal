@@ -1,5 +1,6 @@
 //! CLI command implementations
 
+use std::sync::Arc;
 use std::time::Instant;
 use std::path::Path;
 use anyhow::Result;
@@ -9,7 +10,8 @@ use rayon::prelude::*;
 use tempfile;
 
 use crate::config::Config;
-use crate::scanner::{Walker, Options, Progress as ScannerProgress, FileRecord, ScanError};
+use crate::scanner::{Walker, Progress as ScannerProgress};
+use crate::scanner_types::{Options, FileRecord, ScanError};
 use crate::cache::{Cache, BoltCache, config_hash as cache_config_hash};
 use crate::rules::{Engine, Finding, Category};
 
@@ -40,6 +42,7 @@ pub fn scan_cmd(
     let progress_clone = progress.clone();
 
     // Spawn progress updater
+    let pb_for_thread = pb.clone();
     let progress_handle = std::thread::spawn(move || {
         loop {
             std::thread::sleep(std::time::Duration::from_millis(200));
@@ -52,9 +55,9 @@ pub fn scan_cmd(
                 snap.rate_fps
             );
             if snap.cached > 0 {
-                pb.set_message(format!("{} · {} from cache", msg, format_number(snap.cached)));
+                pb_for_thread.set_message(format!("{} · {} from cache", msg, format_number(snap.cached)));
             } else {
-                pb.set_message(msg);
+                pb_for_thread.set_message(msg);
             }
         }
     });
@@ -70,7 +73,7 @@ pub fn scan_cmd(
     // Cache
     let cache: Option<Arc<dyn Cache>> = if config.use_cache {
         let hash = cache_config_hash(&opts);
-        BoltCache::new("unused-removal", &hash).ok().map(Arc::new)
+        BoltCache::new("unused-removal", &hash).ok().map(|c| Arc::new(c) as Arc<dyn Cache>)
     } else {
         None
     };

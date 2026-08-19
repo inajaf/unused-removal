@@ -1,4 +1,4 @@
-//! Shared types for scanner and cache modules
+//! Shared types for scanner, cache, and rules modules
 
 use std::time::SystemTime;
 use serde::{Serialize, Deserialize};
@@ -54,6 +54,14 @@ impl Default for Options {
     fn default() -> Self {
         Self { workers: 0, follow_links: false, exclude: Vec::new(), exclude_pref: Vec::new() }
     }
+}
+
+/// Cached directory entry
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CacheEntry {
+    pub fingerprint: Fingerprint,
+    pub files: Vec<FileRecord>,
+    pub dirs: Vec<String>,
 }
 
 /// Snapshot of scanning progress for UI/CLI display

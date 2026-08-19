@@ -6,17 +6,10 @@ use redb::{Database, TableDefinition, ReadableTable};
 use anyhow::Result;
 use serde::{Serialize, Deserialize};
 
-use crate::scanner_types::{FileRecord, Fingerprint, Attrs, Options as ScannerOptions};
+use crate::scanner_types::{CacheEntry, FileRecord, Fingerprint, Options as ScannerOptions};
 
 const CACHE_TABLE: TableDefinition<&[u8], &[u8]> = TableDefinition::new("cache");
 const META_TABLE: TableDefinition<&[u8], &[u8]> = TableDefinition::new("meta");
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CacheEntry {
-    pub fingerprint: Fingerprint,
-    pub files: Vec<FileRecord>,
-    pub dirs: Vec<String>,
-}
 
 /// Cache trait for incremental scanning
 pub trait Cache: Send + Sync {
@@ -51,8 +44,8 @@ impl BoltCache {
             let write_txn = db.begin_write()?;
             {
                 let mut meta = write_txn.open_table(META_TABLE)?;
-                let gen_key = b"generation";
-                let stored_gen: Option<Vec<u8>> = meta.get(gen_key)?.map(|v| v.value().to_vec());
+                let gen_key = "generation";
+                let stored_gen: Option<Vec<u8>> = meta.get(gen_key.as_bytes())?.map(|v| v.value().to_vec());
                 
                 if stored_gen.as_deref() == Some(config_hash.as_bytes()) {
                     // Generation matches, keep existing cache
@@ -62,7 +55,7 @@ impl BoltCache {
                         write_txn.delete_table(CACHE_TABLE)?;
                     }
                     let _ = write_txn.open_table(CACHE_TABLE)?;
-                    meta.insert(gen_key, config_hash.as_bytes())?;
+                    meta.insert(gen_key.as_bytes(), config_hash.as_bytes())?;
                 }
             }
             write_txn.commit()?;
@@ -90,7 +83,7 @@ impl Cache for BoltCache {
         let write_txn = self.db.begin_write()?;
         {
             let mut table = write_txn.open_table(CACHE_TABLE)?;
-            let data = postcard::to_vec(&entry)?;
+            let data = postcard::to_allocvec(&entry)?;
             table.insert(key.as_bytes(), data.as_slice())?;
         }
         write_txn.commit()?;
@@ -99,7 +92,12 @@ impl Cache for BoltCache {
 
     fn save_total(&self, n: i64) -> Result<()> {
         let write_txn = self.db.begin_write()?;
-        { let mut table = write_txn.open_table(META_TABLE)?; table.insert(b"total", &n.to_le_bytes())?; }
+        { 
+            let mut table = write_txn.open_table(META_TABLE)?; 
+            let key = b"total";
+            let value = n.to_le_bytes();
+            table.insert(key.as_slice(), value.as_slice())?; 
+        }
         write_txn.commit()?;
         Ok(())
     }
@@ -107,7 +105,7 @@ impl Cache for BoltCache {
     fn load_total(&self) -> Option<i64> {
         let read_txn = self.db.begin_read().ok()?;
         let table = read_txn.open_table(META_TABLE).ok()?;
-        let data = table.get(b"total").ok()??;
+        let data = table.get(b"total".as_slice()).ok()??;
         let bytes: [u8; 8] = data.value().try_into().ok()?;
         Some(i64::from_le_bytes(bytes))
     }

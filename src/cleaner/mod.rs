@@ -3,12 +3,12 @@
 use std::path::PathBuf;
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
-use windows::Win32::UI::Shell::{SHFileOperationW, FO_DELETE, FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_NOERRORUI, FOF_SILENT};
+use windows::Win32::UI::Shell::{SHFileOperationW, FO_DELETE, FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_NOERRORUI, FOF_SILENT, FILEOPERATION_FLAGS};
 use windows::Win32::Foundation::{HWND, BOOL};
 use windows::core::PCWSTR;
 use anyhow::Result;
 
-const FOF_WANTNUKE: u16 = 0x0001; // Not exposed in windows crate
+const FOF_WANTNUKE: u32 = 0x0001; // Not exposed in windows crate
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DeleteResult {
@@ -36,7 +36,7 @@ pub fn recycle_bin(paths: &[String]) -> Result<DeleteResult> {
     if paths.is_empty() {
         return Ok(DeleteResult { deleted: Vec::new(), failed: Vec::new(), total_bytes: 0 });
     }
-    do_sh_file_op(paths, FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_NOERRORUI | FOF_SILENT)
+    do_sh_file_op(paths, FILEOPERATION_FLAGS(FOF_ALLOWUNDO.0 | FOF_NOCONFIRMATION.0 | FOF_NOERRORUI.0 | FOF_SILENT.0))
 }
 
 /// Permanently delete files/directories (bypass Recycle Bin)
@@ -46,13 +46,13 @@ pub fn hard_delete(paths: &[String]) -> Result<DeleteResult> {
     }
     
     // Try SHFileOperation with FOF_WANTNUKE first
-    match do_sh_file_op(paths, FOF_WANTNUKE | FOF_NOCONFIRMATION | FOF_NOERRORUI | FOF_SILENT) {
+    match do_sh_file_op(paths, FILEOPERATION_FLAGS(FOF_WANTNUKE | FOF_NOCONFIRMATION.0 | FOF_NOERRORUI.0 | FOF_SILENT.0)) {
         Ok(result) => Ok(result),
         Err(_) => hard_delete_fallback(paths),
     }
 }
 
-fn do_sh_file_op(paths: &[String], flags: u16) -> Result<DeleteResult> {
+fn do_sh_file_op(paths: &[String], flags: FILEOPERATION_FLAGS) -> Result<DeleteResult> {
     // Build double-null-terminated string list in UTF-16
     let mut from = Vec::new();
     let mut total_bytes = 0u64;
@@ -67,10 +67,10 @@ fn do_sh_file_op(paths: &[String], flags: u16) -> Result<DeleteResult> {
             if metadata.is_file() { total_bytes += metadata.len(); }
         }
         // Convert to wide string
-        let abs_str = abs.to_string_lossy();
+        let abs_str = abs.to_string_lossy().to_string(); // Convert to owned String
         let wide: Vec<u16> = OsStr::new(&abs_str).encode_wide().chain(Some(0)).collect();
         from.extend(wide);
-        valid_paths.push(abs_str.to_string());
+        valid_paths.push(abs_str);
     }
 
     if from.is_empty() {
@@ -85,7 +85,7 @@ fn do_sh_file_op(paths: &[String], flags: u16) -> Result<DeleteResult> {
         wFunc: FO_DELETE,
         pFrom: PCWSTR(from.as_ptr()),
         pTo: PCWSTR::null(),
-        fFlags: flags,
+        fFlags: flags.0 as u16, // FILEOPERATION_FLAGS stores u32, but fFlags is u16
         fAnyOperationsAborted: BOOL(0),
         hNameMappings: std::ptr::null_mut(),
         lpszProgressTitle: PCWSTR::null(),

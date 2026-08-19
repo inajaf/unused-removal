@@ -1,0 +1,33 @@
+# Rust
+/target/
+**/*.rs.bk
+Cargo.lock
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+*.exe
+*.dll
+*.pdb
+
+# Logs
+*.log
+
+# Temp files
+*.tmp
+*.temp
+
+# Cache
+.cache/
+
+# Environment
+.env
+.env.local

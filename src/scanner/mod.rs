@@ -5,25 +5,54 @@ use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Condvar};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use windows::Win32::Foundation::{FILETIME, HANDLE, INVALID_HANDLE_VALUE, CloseHandle};
+use windows::Win32::Foundation::{FILETIME, INVALID_HANDLE_VALUE, CloseHandle};
 use windows::Win32::Storage::FileSystem::{
     FindFirstFileExW, FindNextFileW, FindClose, FIND_FIRST_EX_LARGE_FETCH, FINDEX_INFO_LEVELS,
     FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_HIDDEN, FILE_ATTRIBUTE_SYSTEM,
     WIN32_FIND_DATAW, CreateFileW, GetFileInformationByHandle, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
-    FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_SHARE_DELETE, OPEN_EXISTING, GENERIC_READ,
+    FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_SHARE_DELETE, OPEN_EXISTING,
     BY_HANDLE_FILE_INFORMATION,
 };
+use windows::Win32::Foundation::GENERIC_READ;
 use windows::core::PCWSTR;
 
 use crate::cache::Cache;
-use crate::scanner_types::{CacheEntry, Fingerprint, Attrs, FileRecord, ScanError, Options, Progress, ProgressSnapshot, DirId};
+use crate::scanner_types::{CacheEntry, Fingerprint, Attrs, FileRecord, ScanError, Options, ProgressSnapshot, DirId, FLUSH_BATCH, RECENT_CAP};
 
-mod scanner_types;
+/// Re-export shared types from scanner_types
+pub use crate::scanner_types::*;
 
-const FLUSH_BATCH_CONST: usize = 256;
-const RECENT_CAP_CONST: usize = 50;
+/// RAII guard to ensure total_tasks is decremented when a directory task completes
+struct TaskGuard<'a> {
+    walker: &'a Walker,
+    active: bool,
+}
 
-/// Thread-safe progress tracker - no Clone derive due to atomics
+impl<'a> TaskGuard<'a> {
+    fn new(walker: &'a Walker) -> Self {
+        Self { walker, active: true }
+    }
+    
+    fn disarm(mut self) {
+        self.active = false;
+    }
+}
+
+impl<'a> Drop for TaskGuard<'a> {
+    fn drop(&mut self) {
+        if self.active {
+            let prev = self.walker.total_tasks.load(Ordering::Relaxed);
+            if prev > 0 {
+                self.walker.total_tasks.fetch_sub(1, Ordering::Relaxed);
+                if self.walker.total_tasks.load(Ordering::Relaxed) == 0 {
+                    self.walker.queue_not_empty.notify_all();
+                }
+            }
+        }
+    }
+}
+
+/// Thread-safe progress tracker
 pub struct ProgressInner {
     files: AtomicU64,
     dirs: AtomicU64,
@@ -47,7 +76,7 @@ impl ProgressInner {
             finished: AtomicBool::new(false),
             started: Instant::now(),
             cached: AtomicU64::new(0),
-            recent: Arc::new(Mutex::new(Vec::with_capacity(RECENT_CAP_CONST))),
+            recent: Arc::new(Mutex::new(Vec::with_capacity(RECENT_CAP))),
         }
     }
 
@@ -83,8 +112,8 @@ impl ProgressInner {
     pub fn add_recent_path(&self, path: String) {
         let mut recent = self.recent.lock().unwrap();
         recent.push(path);
-        if recent.len() > RECENT_CAP_CONST {
-            let drain_end = RECENT_CAP_CONST / 2;
+        if recent.len() > RECENT_CAP {
+            let drain_end = RECENT_CAP / 2;
             recent.drain(0..drain_end);
         }
     }
@@ -150,7 +179,7 @@ impl Progress {
     pub fn add_error(&self) { self.inner.add_error(); }
     pub fn add_cached(&self) { self.inner.add_cached(); }
     pub fn set_total(&self, n: i64) { self.inner.set_total(n); }
-    pub fn total(&self) -> i64 { self.inner.total(); }
+    pub fn total(&self) -> i64 { self.inner.total() }
     pub fn finish(&self) { self.inner.finish(); }
     pub fn add_recent_path(&self, path: String) { self.inner.add_recent_path(path); }
     pub fn snapshot(&self) -> ProgressSnapshot { self.inner.snapshot() }
@@ -248,7 +277,8 @@ impl Walker {
                 let mut queue = self.queue.lock().unwrap();
                 loop {
                     if let Some(dir) = queue.pop() { break Some(dir); }
-                    if self.stopped.load(Ordering::Relaxed) && self.total_tasks.load(Ordering::Relaxed) == 0 { break None; }
+                    // Break if no more tasks pending (queue empty and total_tasks == 0)
+                    if self.total_tasks.load(Ordering::Relaxed) == 0 { break None; }
                     queue = self.queue_not_empty.wait(queue).unwrap();
                 }
             };
@@ -261,12 +291,12 @@ impl Walker {
             };
 
             self.process_dir(&dir);
-            self.total_tasks.fetch_sub(1, Ordering::Relaxed);
-            if self.total_tasks.load(Ordering::Relaxed) == 0 { self.queue_not_empty.notify_all(); }
         }
     }
 
     fn process_dir(&self, dir: &str) {
+        // Decrement task counter at the start to ensure it's called even on early return
+        let _task_guard = TaskGuard::new(self);
         self.progress.add_dir();
 
         let (fingerprint, entries) = match read_dir_entries(dir) {
@@ -326,7 +356,7 @@ impl Walker {
         self.progress.add_recent_path(record.path.clone());
         let mut local = Vec::new();
         local.push(record);
-        if local.len() >= FLUSH_BATCH_CONST { self.flush_records(local); }
+        if local.len() >= FLUSH_BATCH { self.flush_records(local); }
     }
 
     fn flush_records(&self, mut local: Vec<FileRecord>) {

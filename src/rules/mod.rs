@@ -9,7 +9,7 @@ use std::fs::File;
 use anyhow::Result;
 
 use crate::config::Config;
-use crate::scanner::FileRecord;
+use crate::scanner_types::FileRecord;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Category {

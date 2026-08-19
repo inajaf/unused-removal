@@ -14,12 +14,13 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style, Stylize},
     text::{Line, Text},
-    widgets::{Block, Borders, Clear, Gauge, List, ListItem, ListState, Paragraph, Row, Table, Wrap},
+    widgets::{Block, Borders, Clear, Gauge, List, ListItem, ListState, Paragraph, Row, Table, Wrap, TableState},
     Frame, Terminal,
 };
 
 use crate::config::Config;
-use crate::scanner::{Walker, Options, Progress, FileRecord, ScanError};
+use crate::scanner::{Walker, Progress};
+use crate::scanner_types::{Options, FileRecord, ScanError};
 use crate::cache::{Cache, BoltCache, config_hash as cache_config_hash};
 use crate::rules::{Engine, Finding, Category, Risk};
 use crate::cleaner::{recycle_bin, hard_delete, DeleteResult};
@@ -80,7 +81,7 @@ struct App {
     config_focus: usize,
     
     // Scanning
-    progress: Arc<Progress>,
+    progress: Progress,
     walker: Option<Walker>,
     scan_handle: Option<std::thread::JoinHandle<anyhow::Result<(Vec<FileRecord>, Vec<ScanError>)>>>,
     scan_start: Option<Instant>,
@@ -89,7 +90,7 @@ struct App {
     findings: Vec<Finding>,
     filtered_findings: Vec<Finding>,
     selected: Vec<SelectedItem>,
-    table_state: ListState,
+    table_state: TableState,
     filter_category: Option<Category>,
     search: String,
     sort_by: SortBy,
@@ -125,14 +126,14 @@ impl App {
             check_duplicates: config.check_duplicates,
             protect_system: config.protect_system,
             config_focus: 0,
-            progress: Arc::new(Progress::new()),
+            progress: Progress::new(),
             walker: None,
             scan_handle: None,
             scan_start: None,
             findings: Vec::new(),
             filtered_findings: Vec::new(),
             selected: Vec::new(),
-            table_state: ListState::default(),
+            table_state: TableState::default(),
             filter_category: None,
             search: String::new(),
             sort_by: SortBy::Size,
@@ -169,7 +170,7 @@ impl App {
                         if handle.is_finished() {
                             let handle = self.scan_handle.take().unwrap();
                             match handle.join() {
-                                Ok(Ok((records, errors))) => {
+                                Ok(Ok((records, _errors))) => {
                                     let engine = Engine::new(Arc::new(self.config.clone()));
                                     let mut findings = engine.analyze(&records);
                                     if self.config.check_duplicates {
@@ -283,11 +284,9 @@ impl App {
             KeyCode::Char('x') => self.confirm_delete("hard"),
             KeyCode::Char('c') => self.cycle_category_filter(),
             KeyCode::Char('/') => {
-                // Search - simplified, just show hint
                 self.status_msg = Some(("Type to search, Esc to clear".to_string(), Style::default().fg(Color::Cyan)));
             }
             KeyCode::Char(c) => {
-                // Add to search
                 self.search.push(c);
                 self.apply_filters();
             }
@@ -330,7 +329,7 @@ impl App {
         self.config.check_duplicates = self.check_duplicates;
         self.config.protect_system = self.protect_system;
 
-        self.progress = Arc::new(Progress::new());
+        self.progress = Progress::new();
         let opts = Options {
             workers: self.config.workers,
             follow_links: self.config.follow_links,
@@ -340,7 +339,7 @@ impl App {
 
         let cache: Option<Arc<dyn Cache>> = if self.config.use_cache {
             let hash = cache_config_hash(&opts);
-            BoltCache::new("unused-removal", &hash).ok().map(Arc::new)
+            BoltCache::new("unused-removal", &hash).ok().map(|c| Arc::new(c) as Arc<dyn Cache>)
         } else {
             None
         };
@@ -714,7 +713,7 @@ impl App {
             Row::new(vec![
                 format!("{}{}", selected_mark, format_bytes(f.size as u64)),
                 format!("{:?}", f.category),
-                format!("{:?}", f.risk).fg(risk_color),
+                format!("{:?}", f.risk).fg(risk_color).to_string(),
                 f.path.clone(),
             ]).style(style)
         }).collect();

@@ -12,17 +12,17 @@ mod tui;
 
 // Re-export scanner types for public API
 pub use scanner_types::{
-    Fingerprint, Attrs, FileRecord, ScanError, Options, Progress, ProgressSnapshot, DirId,
+    Fingerprint, Attrs, FileRecord, ScanError, Options, ProgressSnapshot, DirId,
     FLUSH_BATCH, RECENT_CAP,
 };
+pub use scanner::Progress;
 
-use std::path::Path;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use tracing_subscriber::{EnvFilter, fmt};
 
 use crate::config::Config;
-use crate::scanner::{Walker, Options, Progress};
+use crate::scanner::Walker;
 use crate::cache::{Cache, BoltCache, config_hash as cache_config_hash};
 use crate::rules::{Engine, Finding, Category};
 use crate::cleaner::{recycle_bin, hard_delete};
@@ -30,7 +30,7 @@ use crate::server::run_server;
 use crate::cli::{scan_cmd, bench_cmd, config_cmd};
 
 #[derive(Parser)]
-#[command(name = "unused-removal", version, about = "Fast file scanner and cleaner for Windows")]
+#[command(name = "unused-removal", version, about = "Fast file scanner and cleaner for Windows", disable_version_flag = true)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
