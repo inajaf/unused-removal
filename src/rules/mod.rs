@@ -21,6 +21,7 @@ pub enum Category {
     OldLog,
     StaleInstall,
     Duplicate,
+    AppLeftovers,
 }
 
 impl std::fmt::Display for Category {
@@ -33,6 +34,7 @@ impl std::fmt::Display for Category {
             Category::OldLog => write!(f, "old_log"),
             Category::StaleInstall => write!(f, "stale_install"),
             Category::Duplicate => write!(f, "duplicate"),
+            Category::AppLeftovers => write!(f, "app_leftovers"),
         }
     }
 }
@@ -48,6 +50,7 @@ impl std::str::FromStr for Category {
             "old_log" => Ok(Category::OldLog),
             "stale_install" => Ok(Category::StaleInstall),
             "duplicate" => Ok(Category::Duplicate),
+            "app_leftovers" => Ok(Category::AppLeftovers),
             _ => Err("invalid category"),
         }
     }
@@ -205,6 +208,9 @@ impl Engine {
         if let Some(f) = self.check_stale_install(rec) {
             return Some(f);
         }
+        if let Some(f) = self.check_app_leftovers(rec) {
+            return Some(f);
+        }
         None
     }
 
@@ -344,6 +350,107 @@ impl Engine {
         } else {
             None
         }
+    }
+
+
+    fn check_app_leftovers(&self, rec: &FileRecord) -> Option<Finding> {
+        let lower_path = rec.path.to_lowercase();
+        let name = Path::new(&rec.path)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("");
+        let lower_name = name.to_lowercase();
+
+        #[cfg(target_os = "macos")]
+        {
+            // Common macOS app leftover locations
+            const APP_LEFTOVER_PATHS: &[&str] = &[
+                "/library/preferences/",
+                "/library/application support/",
+                "/library/caches/",
+                "/library/launchagents/",
+                "/library/launchdaemons/",
+                "/library/preferences/byhost/",
+                "/library/saved application state/",
+                "/library/containers/",
+                "/library/group containers/",
+                "/library/saved application state/",
+                "/library/logs/",
+                "/library/logs/diagnosticreports/",
+                "/library/caches/com.apple.",
+                "/library/preferences/com.apple.",
+                "/private/var/folders/",
+                "/var/folders/",
+            ];
+
+            // Check if file is in a known app leftover location
+            for leftover_path in APP_LEFTOVER_PATHS {
+                if lower_path.contains(leftover_path) {
+                    // Common patterns for app leftovers
+                    let leftover_patterns = [
+                        ".plist",
+                        ".cache",
+                        ".log",
+                        ".db",
+                        ".sqlite",
+                        "saved application state",
+                        "savedapplicationstate",
+                        "com.apple.",
+                        "com.",
+                        "org.",
+                        "net.",
+                        "io.",
+                    ];
+
+                    for pattern in &leftover_patterns {
+                        if lower_path.contains(pattern) || lower_name.contains(pattern) {
+                            return Some(Finding::new(
+                                rec.path.clone(),
+                                rec.size,
+                                Category::AppLeftovers,
+                                format!("следы удалённого приложения ({})", pattern),
+                                Risk::Safe,
+                                rec.mod_time,
+                            ).with_extra({
+                                let mut extra = std::collections::HashMap::new();
+                                extra.insert("detection_type".to_string(), "app_leftover".to_string());
+                                extra.insert("pattern".to_string(), pattern.to_string());
+                                extra
+                            }));
+                        }
+                    }
+                }
+            }
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            // On Linux/Windows, check common leftover locations
+            const LEFTOVER_PATHS: &[&str] = &[
+                "/.config/",
+                "/.local/share/",
+                "/.cache/",
+                "/.local/state/",
+                "/appdata/local/",
+                "/appdata/roaming/",
+                "/programdata/",
+            ];
+
+            for leftover_path in LEFTOVER_PATHS {
+                if lower_path.contains(leftover_path) {
+                    return Some(Finding::new(
+                        rec.path.clone(),
+                        rec.size,
+                        Category::AppLeftovers,
+                        "возможные следы удалённого приложения".to_string(),
+                        Risk::Safe,
+                        rec.mod_time,
+                    ));
+                }
+            }
+        }
+
+        None
     }
 
     /// Filter out protected paths

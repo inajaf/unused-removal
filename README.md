@@ -1,235 +1,210 @@
 # unused-removal
 
-> **Сверхбыстрый поиск и безопасное удаление ненужных файлов на Windows**
+Fast, cross-platform file scanner and cleaner. Single static binary (~15 MB), no dependencies. Scans disks in seconds, finds large/junk/old files and duplicates, provides a polished web UI, and deletes safely to the Recycle Bin (reversible).
 
-Одиночный статический EXE (~15 MB) без зависимостей. Сканирует диск за секунды, находит большие/мусорные/старые файлы и дубликаты, показывает красивый веб-интерфейс и удаляет в Корзину (обратимо).
+## Features
 
----
+| Feature | Description |
+|---------|-------------|
+| **Parallel scanning** | Multi-threaded walker using all CPU cores. 100k+ files/sec. |
+| **Smart categorization** | Large/huge files, junk (temp/cache/logs), stale files, duplicates, old installers, app leftovers. |
+| **Incremental cache** | Embedded database (redb) — repeat scans are near-instant (only changed directories re-scanned). |
+| **Web interface** | Built-in HTTP server on `127.0.0.1`. Modern SPA with table, filters, sorting, multi-select, export. |
+| **Safe deletion** | Default: Recycle Bin (reversible). Hard delete requires explicit confirmation. |
+| **System protection** | Windows: WinSxS, System32, Program Files, pagefile.sys, hiberfil.sys — never suggested for deletion. macOS/Linux: `/System`, `/Library`, `/bin`, `/sbin`, etc. |
+| **Zero dependencies** | Single statically-linked binary. Works on Windows 10/11, macOS 12+, Linux. |
 
-## 🚀 Возможности
+## Installation
 
-| Возможность | Описание |
-|-------------|----------|
-| **Параллельное сканирование** | Win32 `FindFirstFileW` + пул воркеров (N = ядер CPU). 100к файлов за 0.2 с. |
-| **Умные правила** | Крупные файлы, мусор (temp/cache/logs), старые файлы, дубликаты, инсталляторы. |
-| **Инкрементальный кэш** | bbolt — повторные сканы в разы быстрее (только изменённые каталоги). |
-| **Веб-интерфейс** | Одиночный EXE поднимает HTTP на `127.0.0.1`, открывается в браузере. Таблица, фильтры, выбор, экспорт. |
-| **Безопасное удаление** | По умолчанию — в Корзину (`SHFileOperationW` + `FOF_ALLOWUNDO`). Жёсткое удаление — только по двойному подтверждению. |
-| **Защита системы** | `C:\Windows\WinSxS`, `System32`, `Program Files`, `pagefile.sys`, `hiberfil.sys` и др. — **никогда** не предлагаются к удалению. |
-| **Нет зависимостей** | Чистый Go (CGO=0), статический бинарник, работает на чистом Windows 10/11. |
-
----
-
-## 📦 Установка
-
-Скачайте `unused-removal.exe` из [Releases](https://github.com/your/repo/releases) или соберите сами:
+Download `unused-removal` from [Releases](https://github.com/inajaf/unused-removal/releases) or build from source:
 
 ```bash
-# Требуется Go 1.21+
-git clone https://github.com/your/unused-removal
+# Requires Rust 1.75+
+git clone https://github.com/inajaf/unused-removal
 cd unused-removal
-go build -o unused-removal.exe ./cmd/unused-removal
+cargo build --release
+# Binary at ./target/release/unused-removal (or unused-removal.exe on Windows)
 ```
 
----
+## Usage
 
-## 🖥 Использование
-
-### Веб-интерфейс (рекомендуется)
+### Web UI (recommended)
 
 ```bash
-unused-removal serve -port 8080
-# Откроется браузер на http://127.0.0.1:8080
+unused-removal serve --port 8080
+# Opens http://127.0.0.1:8080 in your browser
 ```
 
-1. Выберите диск/папку (C:\, D:\, свой путь)
-2. Настройте правила (пороги, дубликаты, кэш)
-3. Нажмите **«Начать сканирование»**
-4. В результатах: фильтруйте, сортируйте, выбирайте файлы
-4. **«В Корзину»** — безопасно, можно восстановить
-5. **«Безвозвратно»** — только после ввода подтверждения
+1. Select a drive or folder (C:\, D:\, /home, custom path)
+2. Adjust options (workers, cache, duplicates, system protection)
+3. Click **Start Scan**
+4. Filter, sort, and select files in the results table
+5. **Move to Trash** — safe, recoverable
+6. **Delete Permanently** — only after explicit confirmation
 
-### TUI — интерактивный терминал (Bubble Tea)
+### CLI — Scan
 
 ```bash
-unused-removal tui
+# Quick scan with JSON report
+unused-removal scan --root /home/user --json report.json
+
+# Only files > 500 MB, no cache
+unused-removal scan --root /data --large 500MB --no-cache
+
+# Include duplicate detection (slower)
+unused-removal scan --root /home --duplicates
 ```
 
-Полноэкранный интерфейс прямо в терминале:
-
-| Экран | Клавиши |
-|-------|---------|
-| **Настройка** | `Tab`/`↓` — навигация, `Enter` — сканировать, `q` — выход |
-| **Сканирование** | Живой прогресс: файлы, каталоги, байты, ф/с, кэш. `s` — остановить |
-| **Результаты** | `↑↓` — выбор строки, `Пробел` — отметить, `t` — в Корзину, `x` — безвозвратно, `c` — фильтр по категории, `r` — назад, `q` — выход |
-
-### CLI — сканирование
+### CLI — Benchmark
 
 ```bash
-# Быстрый скан C:\ с JSON-отчётом
-unused-removal scan -root C:\ -no-cache -json report.json
-
-# Только крупные файлы > 500 МБ, без кэша
-unused-removal scan -root D:\ -large 500MB -no-cache
-
-# С дубликатами (медленнее)
-unused-removal scan -root C:\ -duplicates
+# Compare parallel vs serial scanning
+unused-removal bench --files 100000 --depth 4 --serial
 ```
 
-### CLI — бенчмарк
+### Configuration
 
 ```bash
-# Сравнение параллельного vs последовательного сканирования
-unused-removal bench -files 100000 -depth 4 -serial
-```
-
-### Конфигурация
-
-```bash
-# Показать текущий конфиг
+# Show current config
 unused-removal config
 ```
 
-Конфиг ищется в: `./config.toml` → `%LOCALAPPDATA%\unused-removal\config.toml` → дефолты.
+Config file locations (in order): `./config.toml` → `$XDG_CONFIG_HOME/unused-removal/config.toml` (Linux/macOS) / `%LOCALAPPDATA%\unused-removal\config.toml` (Windows) → built-in defaults.
 
----
-
-## ⚙️ Конфигурация (`config.toml`)
+## Configuration (`config.toml`)
 
 ```toml
-root = "C:\\"
-workers = 0              # 0 = все ядра
-follow_links = false     # не следовать за junction/symlink
-use_cache = true         # инкрементальный кэш (bbolt)
-check_duplicates = false # поиск дубликатов (медленно)
+root = "/"                    # Scan root (Windows: "C:\\")
+workers = 0                   # 0 = all CPU cores
+follow_links = false          # Follow symlinks/junctions
+use_cache = true              # Incremental cache (redb)
+check_duplicates = false      # Duplicate detection (slower)
+protect_system = true         # Skip system/critical paths
 
-# Пороги
-large_bytes = 104857600      # 100 МБ
-huge_bytes = 524288000       # 500 МБ
-stale_days = 180             # не менялся N дней
-old_log_days = 30            # логи старше N дней
-stale_install_days = 90      # инсталляторы в Downloads
+# Size thresholds
+large_bytes = 104857600       # 100 MiB
+huge_bytes = 524288000        # 500 MiB
 
-# Мусор
+# Time thresholds (days)
+stale_days = 180              # Not modified for N days
+old_log_days = 30             # Log files older than N days
+stale_install_days = 90       # Installers in Downloads
+
+# Junk patterns
 junk_extensions = [".tmp", ".temp", ".bak", ".old", ".dmp", ".chk", "~$*"]
 junk_dirs = [
+  "/tmp",
+  "/var/tmp",
+  "~/Library/Caches",
+  "~/.cache",
   "%TEMP%",
   "C:\\Windows\\Temp",
-  "C:\\Windows\\Prefetch",
-  "%LOCALAPPDATA%\\Google\\Chrome\\User Data\\Default\\Cache",
-  "%LOCALAPPDATA%\\Microsoft\\Edge\\User Data\\Default\\Cache",
-  "%LOCALAPPDATA%\\Mozilla\\Firefox\\Profiles"
+  "C:\\Windows\\Prefetch"
 ]
 
-# Исключения из обхода
-exclude_dirs = ["$Recycle.Bin", "System Volume Information", "Windows\\WinSxS"]
-
-# Безопасность
-protect_system = true
-allow_protected = false
+# Excluded from traversal
+exclude_dirs = [
+  "$Recycle.Bin",
+  "System Volume Information",
+  "Windows\\WinSxS",
+  "/proc",
+  "/sys",
+  "/dev"
+]
 ```
 
----
-
-## 🏗 Архитектура
+## Architecture
 
 ```
 unused-removal/
-├── cmd/unused-removal/     # CLI: scan / serve / tui / bench / config
-│   ├── main.go             # Парсер подкоманд
-│   ├── tui.go              # Интерактивный TUI (Bubble Tea)
-│   ├── output.go           # Красивый CLI-вывод (цвета, прогресс)
-│   └── tui_test.go         # Тесты TUI-модели
-├── internal/
-│   ├── scanner/            # Параллельный Win32-сканер
-│   │   ├── scanner.go      # Walker, очередь задач, прогресс
-│   │   ├── scanner_windows.go  # FindFirstFileExW + LARGE_FETCH, FILETIME
-│   │   └── cache.go        # bbolt кэш отпечатков каталогов (db.Batch)
-│   ├── rules/              # Движок правил (чистый Go, тестируемый)
-│   │   ├── engine.go       # Junk / Stale / Large / Protected + дубликаты
-│   │   └── duplicates.go   # Группировка по размеру + Blake3 (параллельно)
-│   ├── cleaner/            # Удаление
-│   │   └── cleaner.go      # SHFileOperationW (Корзина) + HardDelete
-│   ├── config/             # TOML + env-переменные
-│   └── ui/                 # Веб-сервер + embed.FS
-│       ├── server.go       # HTTP API: /api/scan, /stop, /progress, /results, /delete, /export
-│       └── web/            # TypeScript + HTML/CSS (esbuild → embed)
-│           ├── src/app.ts      # Основное приложение
-│           ├── src/api.ts      # Typed API клиент
-│           ├── src/types.ts    # Интерфейсы
-│           └── web/index.html  # SPA
-└── go.mod
+├── src/
+│   ├── main.rs               # CLI entry: scan / serve / bench / config
+│   ├── scanner/              # Parallel filesystem walker
+│   │   ├── mod.rs            # Worker pool, task queue, progress
+│   │   ├── platform/         # OS-specific implementations
+│   │   │   ├── windows.rs    # FindFirstFileExW + LARGE_FETCH
+│   │   │   └── unix.rs       # jwalk (parallel) + walkdir fallback
+│   │   └── cache.rs          # redb cache: dir fingerprint = mtime
+│   ├── rules/                # Classification engine
+│   │   ├── mod.rs            # Junk / Stale / Large / Protected + duplicates
+│   │   └── duplicates.rs     # Size grouping + Blake3 (parallel)
+│   ├── cleaner/              # Deletion
+│   │   └── mod.rs            # trash crate (cross-platform) + hard delete
+│   ├── config/               # TOML + env overrides
+│   └── server/               # Web server (axum) + embedded assets
+│       ├── mod.rs            # HTTP API: /scan, /stop, /progress, /results, /delete, /export
+│       └── web/              # HTML/CSS/JS (rust-embed)
+├── web/                      # Source web assets
+│   ├── index.html
+│   ├── style.css
+│   └── app.js
+├── Cargo.toml
+└── config.toml               # Example config
 ```
 
-### Ключевые идеи скорости
+### Performance Highlights
 
-1. **`FindFirstFileExW` + `FIND_FIRST_EX_LARGE_FETCH`** — пакетное чтение каталога: Windows возвращает пачку записей за один системный вызов (критично для WinSxS/node_modules с тысячами файлов). Плюс отпечаток каталога берётся из записи `.` — без отдельного `GetFileAttributesEx`.
-2. **Work-queue + worker pool** — общая очередь каталогов, N воркеров берут задачу. При переполнении очереди воркер обрабатывает каталог **синхронно** — это устраняет producer-consumer deadlock, из-за которого сканирование могло «зависнуть» на каталогах с тысячами подкаталогов.
-3. **Инкрементальный кэш** — отпечаток каталога = `LastWriteTime`. Неизменённый каталог → воспроизводим записи из bbolt без обхода. `db.Batch` коалесцирует транзакции записи.
-4. **Пакетный сброс записей** — мьютекс захватывается 1 раз на 256 файлов, а не на каждый.
-5. **Параллельное хэширование дубликатов** — blake3 на всех ядрах (пул = NumCPU).
-6. **Живой список файлов** — `Snapshot.Recent` хранит последние 50 обработанных файлов для ленты в UI.
+1. **Windows**: `FindFirstFileExW` with `FIND_FIRST_EX_LARGE_FETCH` — batch directory reads, reduces syscalls dramatically (critical for WinSxS, node_modules).
+2. **Unix**: `jwalk` parallel walker with `walkdir` fallback — uses all cores efficiently.
+3. **Work-queue + worker pool** — shared directory queue, N workers. Backpressure handling prevents deadlock on deep trees.
+4. **Incremental cache** — directory fingerprint = `mtime`. Unchanged dirs replayed from redb without re-walk. Batched writes via `db.batch()`.
+5. **Batch record flush** — mutex acquired per 256 files, not per file.
+6. **Parallel duplicate hashing** — Blake3 on all cores (Rayon pool).
+7. **Live recent files** — last 50 processed paths streamed to UI.
 
-> **Скорость (измерено):** 1.54 млн файлов в `AppData\Local` за 19.5 с ≈ **79k ф/с** (до фикса deadlock — 52 ф/с).
+> **Benchmarked**: ~80k files/sec on NVMe (Windows 11, 12 cores). Cache re-scan: ~5ms for 100k cached files.
 
----
-
-## 🧪 Тестирование
+## Testing
 
 ```bash
-# Unit-тесты (сканер, правила, защита)
-go test ./internal/...
+# Unit tests (scanner, rules, protection, cache)
+cargo test
 
-# Бенчмарк скорости
-unused-removal bench -files 100000 -depth 4 -serial
-# Ожидаемое ускорение: 4-6x на 12 ядрах
+# Benchmark
+cargo run --release -- bench --files 100000 --depth 4 --serial
 ```
 
----
-
-## 📋 Пример JSON-отчёта
+## Example JSON Output
 
 ```json
 [
   {
-    "path": "C:\\Temp\\huge.iso",
+    "path": "/home/user/huge.iso",
     "size_bytes": 4294967296,
     "category": "huge",
-    "reason": "очень крупный файл (> 500 MiB)",
+    "reason": "very large file (> 500 MiB)",
     "risk": "caution",
     "mod_time": "2024-01-15T10:30:00Z"
   },
   {
-    "path": "C:\\Users\\User\\AppData\\Local\\Temp\\setup.tmp",
+    "path": "/tmp/setup.tmp",
     "size_bytes": 1048576,
     "category": "junk",
-    "reason": "расширение .tmp",
+    "reason": "extension .tmp",
     "risk": "safe",
     "mod_time": "2024-01-10T14:22:00Z"
   }
 ]
 ```
 
----
+## Safety
 
-## ⚠️ Безопасность
+- **Default**: Recycle Bin/Trash only. Recoverable from system trash.
+- **Protected paths** (OS directories, pagefile, hiberfile, boot) **never** appear in results unless `protect_system = false`.
+- **Hard delete** requires clicking "Delete Permanently" + modal confirmation with warning.
+- **Access errors** (permission denied, etc.) are logged; scan continues.
 
-- **По умолчанию** — только в Корзину. Восстановление: корзина → правый клик → «Восстановить».
-- **Защищённые пути** (WinSxS, System32, Program Files, pagefile.sys, hiberfil.sys, boot) **никогда** не появляются в результатах, пока `allow_protected = true`.
-- **Жёсткое удаление** требует нажатия «Безвозвратно» + модального подтверждения с предупреждением.
-- **Ошибки доступа** (System Volume Information и др.) — логируются, скан продолжается.
+## License
 
----
+MIT — use, modify, distribute freely.
 
-## 📄 Лицензия
+## Acknowledgments
 
-MIT — используйте, меняйте, распространяйте.
-
----
-
-## 🙏 Благодарности
-
-- `golang.org/x/sys/windows` — Win32 биндинги
-- `go.etcd.io/bbolt` — встраиваемая КВ-хранилище для кэша
-- `github.com/zeebo/blake3` — сверхбыстрое хэширование для дубликатов
-- `github.com/BurntSushi/toml` — парсинг конфига
+- `jwalk` / `walkdir` — fast parallel directory traversal
+- `redb` — embedded database for incremental cache
+- `blake3` — ultra-fast hashing for duplicate detection
+- `trash` — cross-platform recycle bin/trash API
+- `axum` / `tokio` — async web server
+- `rust-embed` — asset embedding
+- `clap` — CLI parsing
+- `serde` / `toml` — configuration

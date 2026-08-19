@@ -261,6 +261,7 @@ fn category_icon(cat: Category) -> &'static str {
         Category::StaleInstall => "📦",
         Category::Stale => "⏳",
         Category::Duplicate => "🔁",
+        Category::AppLeftovers => "📦",
     }
 }
 

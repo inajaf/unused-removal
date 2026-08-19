@@ -7,7 +7,23 @@
     "dev": "tsc -w"
   },
   "devDependencies": {
-    "typescript": "^5.3.0",
-    "esbuild": "^0.20.0"
+    "esbuild": "^0.20.0",
+    "typescript": "^5.3.0"
+  },
+  "description": "> **Сверхбыстрый поиск и безопасное удаление ненужных файлов на Windows**",
+  "main": "test_ui.js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/inajaf/unused-removal.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/inajaf/unused-removal/issues"
+  },
+  "homepage": "https://github.com/inajaf/unused-removal#readme",
+  "dependencies": {
+    "playwright": "^1.62.1"
   }
 }
