@@ -36,18 +36,15 @@ pub fn scan_cmd(
     );
     pb.enable_steady_tick(std::time::Duration::from_millis(100));
 
-    let progress = std::sync::Arc::new(ScannerProgress::new());
+    let progress = ScannerProgress::new();
     let progress_clone = progress.clone();
 
     // Spawn progress updater
     let progress_handle = std::thread::spawn(move || {
-        let mut last_files = 0u64;
         loop {
             std::thread::sleep(std::time::Duration::from_millis(200));
             let snap = progress_clone.snapshot();
-            if snap.finished {
-                break;
-            }
+            if snap.finished { break; }
             let msg = format!(
                 "{} files, {} · {:.0} files/s",
                 format_number(snap.files),
@@ -59,7 +56,6 @@ pub fn scan_cmd(
             } else {
                 pb.set_message(msg);
             }
-            last_files = snap.files as u64;
         }
     });
 
@@ -79,7 +75,7 @@ pub fn scan_cmd(
         None
     };
 
-    let walker = Walker::new(opts, progress.clone(), cache);
+    let walker = Walker::new(opts, progress, cache);
     
     // Run scan in blocking task
     let (records, errors) = walker.walk(&config.root)?;
@@ -155,7 +151,7 @@ pub fn bench_cmd(config: &Config, files: usize, depth: usize, serial: bool) -> R
     };
 
     // Parallel scan
-    let progress = std::sync::Arc::new(ScannerProgress::new());
+    let progress = ScannerProgress::new();
     let walker = Walker::new(opts.clone(), progress, None);
     
     let start = Instant::now();
@@ -173,7 +169,7 @@ pub fn bench_cmd(config: &Config, files: usize, depth: usize, serial: bool) -> R
     if serial {
         cfg.workers = 1;
         let opts_serial = Options { workers: 1, ..opts };
-        let progress2 = std::sync::Arc::new(ScannerProgress::new());
+        let progress2 = ScannerProgress::new();
         let walker2 = Walker::new(opts_serial, progress2, None);
         
         let start = Instant::now();
@@ -330,7 +326,7 @@ fn escape_csv(s: &str) -> String {
 /// Create test fixture for benchmarking
 fn create_fixture(root: &Path, total_files: usize, depth: usize) -> Result<()> {
     let files_per_dir = (total_files / 100).max(1);
-    let dirs = (total_files / files_per_dir).max(1);
+    let _dirs = (total_files / files_per_dir).max(1);
     
     fn create_dir_recursive(path: &Path, current_depth: usize, max_depth: usize, files_per_dir: usize) -> Result<()> {
         if current_depth >= max_depth {

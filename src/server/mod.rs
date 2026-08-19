@@ -4,7 +4,6 @@ use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
-use std::str::FromStr;
 
 use axum::{
     extract::{Query, State},
@@ -257,7 +256,7 @@ async fn handle_scan(
 
     let cache: Option<Arc<dyn Cache>> = if cfg.use_cache {
         let hash = cache_config_hash(&opts);
-        BoltCache::new("unused-removal", &hash).ok().map(Arc::new)
+        BoltCache::new("unused-removal", &hash).ok().map(|c| Arc::new(c) as Arc<dyn Cache>)
     } else { None };
 
     let walker = Walker::new(opts, progress, cache);
@@ -316,14 +315,14 @@ async fn handle_stop(State(state): State<ServerState>) -> impl IntoResponse {
     Json(serde_json::json!({ "status": "stopped", "stopped": stopped }))
 }
 
-async fn handle_progress(State(state): State<ServerState>) -> impl IntoResponse {
+async fn handle_progress(State(state): State<ServerState>) -> Response {
     let progress = state.progress.lock().unwrap().clone();
     let done = *state.scan_done.lock().unwrap();
     
     if let Some(p) = progress {
-        Json(ProgressResponse { progress: p.snapshot(), done })
+        Json(ProgressResponse { progress: p.snapshot(), done }).into_response()
     } else {
-        (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": "no scan in progress" })))
+        (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": "no scan in progress" }))).into_response()
     }
 }
 
@@ -333,7 +332,7 @@ async fn handle_results(
 ) -> impl IntoResponse {
     let findings = state.findings.lock().unwrap().clone();
     
-    let mut filtered = findings;
+    let mut filtered = findings.clone();
     
     if let Some(cat) = params.category {
         if let Ok(category) = Category::from_str(&cat) {
@@ -353,7 +352,7 @@ async fn handle_results(
     let offset = params.offset.unwrap_or(0);
     let limit = params.limit.unwrap_or(filtered.len());
     
-    let paginated: Vec<Finding> = filtered.into_iter()
+    let paginated: Vec<Finding> = filtered.clone().into_iter()
         .skip(offset)
         .take(limit)
         .collect();
@@ -368,7 +367,7 @@ async fn handle_results(
 async fn handle_delete(
     State(state): State<ServerState>,
     Json(req): Json<DeleteRequest>,
-) -> impl IntoResponse {
+) -> Response {
     if req.paths.is_empty() {
         return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": "no paths provided" }))).into_response();
     }
@@ -408,7 +407,7 @@ async fn handle_get_config(State(state): State<ServerState>) -> impl IntoRespons
 async fn handle_put_config(
     State(state): State<ServerState>,
     Json(cfg): Json<Config>,
-) -> impl IntoResponse {
+) -> Response {
     *state.config.lock().unwrap() = cfg.clone();
     
     if let Err(e) = cfg.save(Path::new("config.toml")) {
@@ -416,13 +415,13 @@ async fn handle_put_config(
         return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() }))).into_response();
     }
     
-    Json(serde_json::json!({ "status": "saved" }))
+    Json(serde_json::json!({ "status": "saved" })).into_response()
 }
 
 async fn handle_export(
     State(state): State<ServerState>,
     Query(params): Query<HashMap<String, String>>,
-) -> impl IntoResponse {
+) -> Response {
     let format = params.get("format").cloned().unwrap_or_else(|| "json".to_string());
     let findings = state.findings.lock().unwrap().clone();
     
@@ -465,7 +464,7 @@ async fn handle_export(
 async fn handle_static(
     State(_state): State<ServerState>,
     axum::extract::Path(path): axum::extract::Path<String>,
-) -> impl IntoResponse {
+) -> Response {
     let path = if path.is_empty() || path == "/" { "index.html" } else { &path };
     
     match WebAssets::get(path) {

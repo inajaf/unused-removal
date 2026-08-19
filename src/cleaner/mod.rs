@@ -1,6 +1,6 @@
 //! File deletion operations: Recycle Bin and Hard Delete using Windows Shell API
 
-use std::path::Path;
+use std::path::PathBuf;
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 use windows::Win32::UI::Shell::{SHFileOperationW, FO_DELETE, FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_NOERRORUI, FOF_SILENT};
@@ -67,9 +67,10 @@ fn do_sh_file_op(paths: &[String], flags: u16) -> Result<DeleteResult> {
             if metadata.is_file() { total_bytes += metadata.len(); }
         }
         // Convert to wide string
-        let wide: Vec<u16> = OsStr::new(&abs.to_string_lossy()).encode_wide().chain(Some(0)).collect();
+        let abs_str = abs.to_string_lossy();
+        let wide: Vec<u16> = OsStr::new(&abs_str).encode_wide().chain(Some(0)).collect();
         from.extend(wide);
-        valid_paths.push(abs.to_string_lossy().to_string());
+        valid_paths.push(abs_str.to_string());
     }
 
     if from.is_empty() {
@@ -143,10 +144,11 @@ fn hard_delete_fallback(paths: &[String]) -> Result<DeleteResult> {
         }
     });
 
+    let total_bytes_val = *total_bytes.lock().unwrap();
     Ok(DeleteResult {
         deleted: Arc::try_unwrap(deleted).unwrap().into_inner().unwrap(),
         failed: Arc::try_unwrap(failed).unwrap().into_inner().unwrap(),
-        total_bytes: *total_bytes.lock().unwrap(),
+        total_bytes: total_bytes_val,
     })
 }
 
