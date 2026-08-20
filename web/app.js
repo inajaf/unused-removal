@@ -127,7 +127,9 @@ const els = {};
 // ===== Animation Helpers =====
 function animatePhaseTransition(fromEl, toEl, callback) {
   const prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  if (prefersReduced || !fromEl) {
+  // Skip exit animation if source is hidden (display:none never fires animationend)
+  const fromVisible = fromEl && fromEl.offsetParent !== null;
+  if (prefersReduced || !fromEl || !fromVisible) {
     fromEl?.classList.add('hidden');
     toEl.classList.remove('hidden');
     callback?.();
@@ -295,6 +297,7 @@ const api = {
 function init() {
   cacheElements();
   bindEvents();
+  bindCategoryCardEvents();
   loadConfig();
 }
 
@@ -310,6 +313,7 @@ function cacheElements() {
   els.btnScan = document.getElementById('btn-scan');
   els.btnStop = document.getElementById('btn-stop');
   els.btnBackToSmart = document.getElementById('btn-back-to-smart');
+  els.btnBackToSmartResults = document.getElementById('btn-back-to-smart-results');
 
   // Smart Scan phase
   els.smartScanSection = document.getElementById('smart-scan-phase');
@@ -374,6 +378,7 @@ function cacheElements() {
   els.modalTitle = document.getElementById('modal-title');
   els.modalText = document.getElementById('modal-text');
   els.modalCancel = document.getElementById('modal-cancel');
+  els.modalClose = document.querySelector('.modal-close');
   els.modalConfirm = document.getElementById('modal-confirm');
 }
 
@@ -401,6 +406,7 @@ function bindEvents() {
   els.btnStop.addEventListener('click', stopScan);
   if (els.btnStopProgress) els.btnStopProgress.addEventListener('click', stopScan);
   if (els.btnBackToSmart) els.btnBackToSmart.addEventListener('click', () => setPhase('smart-scan'));
+  if (els.btnBackToSmartResults) els.btnBackToSmartResults.addEventListener('click', () => setPhase('smart-scan'));
 
   els.filterCategory.addEventListener('change', applyFilters);
   els.filterSearch.addEventListener('input', debounce(applyFilters, 300));
@@ -425,6 +431,7 @@ function bindEvents() {
   els.btnExportCsv.addEventListener('click', () => exportReport('csv'));
 
   els.modalCancel.addEventListener('click', hideModal);
+  if (els.modalClose) els.modalClose.addEventListener('click', hideModal);
   els.modalConfirm.addEventListener('click', executeDelete);
   els.modal.addEventListener('click', (e) => { if (e.target === els.modal) hideModal(); });
 
@@ -696,17 +703,30 @@ async function loadResults() {
 let smartProgressPollTimer = null;
 
 async function startSmartScan() {
-  const root = els.rootSelect.value === 'custom' ? els.rootCustom.value.trim() : els.rootSelect.value;
+  // Smart scan uses the server-configured root (not the hidden advanced-form select,
+  // which may be stale or never touched by the user).
+  let root = null;
+  let workers = 0, followLinks = false, useCache = true, protectSystem = true;
+  try {
+    const cfg = await api.getConfig();
+    root = cfg.root;
+    workers = cfg.workers || 0;
+    followLinks = !!cfg.follow_links;
+    useCache = cfg.use_cache ?? true;
+    protectSystem = cfg.protect_system ?? true;
+  } catch (e) {
+    console.warn('Config load failed for smart scan:', e);
+  }
   if (!root) { showToast('Выберите или введите путь для сканирования', 'warning'); return; }
 
   // Update config with smart scan settings
   const config = {
     root,
-    workers: parseInt(els.workers.value) || 0,
-    follow_links: els.followLinks.checked,
-    use_cache: els.useCache.checked,
+    workers,
+    follow_links: followLinks,
+    use_cache: useCache,
     check_duplicates: true, // Always enable for smart scan
-    protect_system: els.protectSystem.checked,
+    protect_system: protectSystem,
     // Enable all smart junk categories
     smart_junk_enabled: true,
     scan_user_caches: true,
@@ -786,7 +806,19 @@ async function loadSmartResults() {
     state.smartScanCategories = res.categories;
     state.smartTotalReclaimable = res.total_reclaimable;
     state.smartSelectedCategories = new Set(res.categories.map(c => c.category));
-    state.findings = []; // Will be populated when user clicks "Review"
+    
+    // Load detailed findings so the "Просмотреть детально" table has data
+    try {
+      const detail = await api.getResults({ limit: 10000 });
+      state.findings = detail.items;
+      state.filteredFindings = [...detail.items];
+      state.currentPage = 1;
+      renderTable();
+      updateSummary();
+    } catch (e) {
+      console.warn('Detailed results load failed:', e);
+      state.findings = [];
+    }
     
     // Update summary
     els.smartSummaryTotal.textContent = formatNumber(res.total_files);
@@ -832,15 +864,15 @@ function renderCategoryCards() {
   <div class="category-stats">
     <span class="category-size">${formatBytes(cat.total_size)}</span>
     <label class="category-checkbox">
-      <input type="checkbox" ${isSelected ? 'checked' : ''} ${!isAllowed ? 'disabled' : ''} onchange="toggleSmartCategory('${escapeHtml(cat.category)}', this.checked)">
+      <input type="checkbox" data-category-check="${escapeHtml(cat.category)}" ${isSelected ? 'checked' : ''} ${!isAllowed ? 'disabled' : ''}>
       <span>Выбрать</span>
     </label>
   </div>
   <div class="category-paths">
     ${cat.paths_sample.slice(0, 3).map(p => `<div class="category-path" title="${escapeHtml(p)}">${escapeHtml(p)}</div>`).join('')}
-    ${cat.count > 3 ? `<div class="category-path" style="color: var(--accent); cursor: pointer;" onclick="toggleCategoryExpand(this.closest('.category-card'))">… и ещё ${cat.count - 3} файлов</div>` : ''}
+    ${cat.count > 3 ? `<div class="category-path more-paths" data-category-card="true">… и ещё ${cat.count - 3} файлов</div>` : ''}
   </div>
-  <button class="category-toggle" onclick="toggleCategoryExpand(this.closest('.category-card'))" aria-label="Развернуть">
+  <button class="category-toggle" data-category-card="true" aria-label="Развернуть">
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
   </button>
 </div>
@@ -849,6 +881,27 @@ function renderCategoryCards() {
   
   // Apply stagger animation
   staggerChildren(container, '.category-card', 50, 30);
+}
+
+// Event delegation for category cards (module scripts can't use inline onclick)
+function bindCategoryCardEvents() {
+  const container = els.categoryCards;
+  if (!container) return;
+  
+  container.addEventListener('change', (e) => {
+    const checkbox = e.target.closest('[data-category-check]');
+    if (checkbox) {
+      toggleSmartCategory(checkbox.dataset.categoryCheck, checkbox.checked);
+    }
+  });
+  
+  container.addEventListener('click', (e) => {
+    const toggle = e.target.closest('[data-category-card="true"]');
+    if (toggle) {
+      const card = toggle.closest('.category-card');
+      if (card) toggleCategoryExpand(card);
+    }
+  });
 }
 
 function animateDonutChart() {
@@ -1121,14 +1174,20 @@ ${isHard ? iconSvg('alert', 16, 'modal-icon danger') + ' <strong>Это дейс
 
 function hideModal() {
   const prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const finishHide = () => {
+    els.modal.classList.add('hidden');
+    els.modal.classList.remove('exiting');
+  };
   if (!prefersReduced) {
     els.modal.classList.add('exiting');
+    // Fallback timeout in case animationend never fires (e.g. display:none interrupts it)
+    const timer = setTimeout(finishHide, 250);
     els.modal.addEventListener('animationend', () => {
-      els.modal.classList.add('hidden');
-      els.modal.classList.remove('exiting');
+      clearTimeout(timer);
+      finishHide();
     }, { once: true });
   } else {
-    els.modal.classList.add('hidden');
+    finishHide();
   }
   state.pendingDeleteMode = null;
 }

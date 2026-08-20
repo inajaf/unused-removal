@@ -11,8 +11,8 @@ const { chromium } = require('playwright');
   });
   page.on('pageerror', err => errors.push(err.message));
 
-  console.log('🌐 Navigating to http://127.0.0.1:3081...');
-  await page.goto('http://127.0.0.1:3081', { waitUntil: 'networkidle' });
+  console.log('🌐 Navigating to http://127.0.0.1:3082...');
+  await page.goto('http://127.0.0.1:3082', { waitUntil: 'networkidle' });
   
   console.log('✅ Page loaded');
   

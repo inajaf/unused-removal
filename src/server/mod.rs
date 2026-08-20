@@ -326,7 +326,15 @@ async fn handle_scan(
     // Drop the previous scanner (and its open redb DB handle) BEFORE creating
     // a new one — redb locks the database file, so a second Database::create
     // on the same path fails silently unless the old handle is released first.
-    *state.scanner.lock().unwrap() = None;
+    // Also STOP the old walker so a previous long scan doesn't keep consuming
+    // CPU/memory in the background.
+    {
+        let mut lock = state.scanner.lock().unwrap();
+        if let Some(old) = lock.as_ref() {
+            old.stop();
+        }
+        *lock = None;
+    }
     
     *state.findings.lock().unwrap() = Vec::new();
     *state.records.lock().unwrap() = Vec::new();
@@ -641,14 +649,22 @@ async fn handle_smart_scan(
     cfg.scan_large_hidden = true;
     cfg.check_duplicates = true;
 
-    // Reset state
+    // Increment scan id
     let scan_id = {
         let mut scan_id = state.scan_id.lock().unwrap();
         *scan_id += 1;
         *scan_id
     };
-    
-    *state.scanner.lock().unwrap() = None;
+
+    // Reset state: stop any previous walker first so it can't keep running
+    // (and consuming CPU/RAM) after being replaced by a new scan.
+    {
+        let mut lock = state.scanner.lock().unwrap();
+        if let Some(old) = lock.as_ref() {
+            old.stop();
+        }
+        *lock = None;
+    }
     *state.findings.lock().unwrap() = Vec::new();
     *state.records.lock().unwrap() = Vec::new();
     *state.errors.lock().unwrap() = Vec::new();

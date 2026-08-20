@@ -864,6 +864,22 @@ body::before {
   to { opacity: 1; }
 }
 
+.modal.exiting {
+  animation: modalOverlayOut var(--fast) forwards;
+}
+
+@keyframes modalOverlayOut {
+  to { opacity: 0; }
+}
+
+.modal-content.exiting {
+  animation: modalContentOut var(--fast) forwards;
+}
+
+@keyframes modalContentOut {
+  to { opacity: 0; transform: scale(0.95); }
+}
+
 .modal-overlay {
   position: absolute; inset: 0;
   background: rgba(0,0,0,0.7);
@@ -1457,6 +1473,11 @@ body::before {
 .category-path:hover {
   color: var(--fg);
   background: var(--bg-hover);
+}
+
+.category-path.more-paths {
+  color: var(--accent);
+  cursor: pointer;
 }
 
 .category-toggle {

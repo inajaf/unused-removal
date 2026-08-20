@@ -158,11 +158,11 @@ impl Config {
                 follow_links: false,
                 exclude_dirs: vec![
                     ".Trash".to_string(),
-                    "System".to_string(),
-                    "Library".to_string(),
-                    "private".to_string(),
-                    "Volumes".to_string(),
-                    "Network".to_string(),
+                    "/System".to_string(),
+                    "/Library".to_string(),
+                    "/private".to_string(),
+                    "/Volumes".to_string(),
+                    "/Network".to_string(),
                 ],
                 exclude_prefix: vec![],
                 large_bytes: 100 * 1024 * 1024,      // 100 MB
