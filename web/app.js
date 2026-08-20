@@ -309,6 +309,7 @@ function cacheElements() {
   els.protectSystem = document.getElementById('protect-system');
   els.btnScan = document.getElementById('btn-scan');
   els.btnStop = document.getElementById('btn-stop');
+  els.btnBackToSmart = document.getElementById('btn-back-to-smart');
 
   // Smart Scan phase
   els.smartScanSection = document.getElementById('smart-scan-phase');
@@ -399,6 +400,7 @@ function bindEvents() {
   els.btnScan.addEventListener('click', startScan);
   els.btnStop.addEventListener('click', stopScan);
   if (els.btnStopProgress) els.btnStopProgress.addEventListener('click', stopScan);
+  if (els.btnBackToSmart) els.btnBackToSmart.addEventListener('click', () => setPhase('smart-scan'));
 
   els.filterCategory.addEventListener('change', applyFilters);
   els.filterSearch.addEventListener('input', debounce(applyFilters, 300));
