@@ -1,5 +1,5 @@
-root = "/tmp/ur_test"
-workers = 4
+root = "/tmp/ur_big"
+workers = 8
 follow_links = false
 exclude_dirs = [
     ".Trash",

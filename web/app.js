@@ -107,6 +107,8 @@ const state = {
   scanId: 0,
   findings: [],
   filteredFindings: [],
+  // Precomputed lowercase/time indexes for fast search & sort (rebuilt on load)
+  searchIndex: [],
   selectedPaths: new Set(),
   currentPage: 1,
   pageSize: 100,
@@ -356,6 +358,7 @@ function cacheElements() {
   // Results phase
   els.filterCategory = document.getElementById('filter-category');
   els.filterSearch = document.getElementById('filter-search');
+  els.searchClear = document.getElementById('search-clear');
   els.resultsBody = document.getElementById('results-body');
   els.tableWrapper = document.querySelector('.table-wrapper');
   els.selectAll = document.getElementById('select-all');
@@ -409,7 +412,18 @@ function bindEvents() {
   if (els.btnBackToSmartResults) els.btnBackToSmartResults.addEventListener('click', () => setPhase('smart-scan'));
 
   els.filterCategory.addEventListener('change', applyFilters);
-  els.filterSearch.addEventListener('input', debounce(applyFilters, 300));
+  els.filterSearch.addEventListener('input', debounce(() => {
+    if (els.searchClear) els.searchClear.hidden = !els.filterSearch.value;
+    applyFilters();
+  }, 120));
+  if (els.searchClear) {
+    els.searchClear.addEventListener('click', () => {
+      els.filterSearch.value = '';
+      els.searchClear.hidden = true;
+      applyFilters();
+      els.filterSearch.focus();
+    });
+  }
 
   els.selectAll.addEventListener('change', toggleSelectAll);
 
@@ -546,7 +560,11 @@ function setPhase(phase) {
       ring.style.strokeDashoffset = String(CIRC);
     }
     if (els.progressPercent) els.progressPercent.textContent = '0';
+    // Pulsing glow while scanning
+    els.progressSection?.querySelector('.progress-ring')?.classList.add('scanning');
     triggerStatAnimations();
+  } else {
+    els.progressSection?.querySelector('.progress-ring')?.classList.remove('scanning');
   }
 
   if (isResults) {
@@ -688,6 +706,7 @@ async function loadResults() {
     const res = await api.getResults({ limit: 10000 });
     state.findings = res.items;
     state.filteredFindings = [...res.items];
+    buildSearchIndex(res.items);
     state.currentPage = 1;
     lastRecentPaths.clear();
     renderTable();
@@ -697,6 +716,17 @@ async function loadResults() {
     showToast('Ошибка загрузки результатов: ' + e.message, 'error');
     setPhase('config');
   }
+}
+
+// Precompute lowercase paths/reasons and numeric timestamps once, so
+// filtering & sorting don't re-run toLowerCase()/Date.parse() per keystroke.
+function buildSearchIndex(items) {
+  state.searchIndex = items.map(f => ({
+    path: f.path.toLowerCase(),
+    reason: (f.reason || '').toLowerCase(),
+    time: Date.parse(f.mod_time) || 0,
+    size: f.size
+  }));
 }
 
 // ===== Smart Scan Phase =====
@@ -812,17 +842,19 @@ async function loadSmartResults() {
       const detail = await api.getResults({ limit: 10000 });
       state.findings = detail.items;
       state.filteredFindings = [...detail.items];
+      buildSearchIndex(detail.items);
       state.currentPage = 1;
       renderTable();
       updateSummary();
     } catch (e) {
       console.warn('Detailed results load failed:', e);
       state.findings = [];
+      state.searchIndex = [];
     }
     
     // Update summary
     els.smartSummaryTotal.textContent = formatNumber(res.total_files);
-    els.smartSummarySize.textContent = formatBytes(res.total_reclaimable);
+    animateValue(els.smartSummarySize, res.total_reclaimable, formatBytes);
     
     // Update donut chart text
     els.donutReclaimable.textContent = formatBytes(res.total_reclaimable);
@@ -904,34 +936,39 @@ function bindCategoryCardEvents() {
   });
 }
 
-function animateDonutChart() {
+// Animate a number counting up from 0 to target over `ms`
+function animateValue(el, target, formatter, ms = 700) {
+  if (!el) return;
   const prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  if (prefersReduced) {
-    // Set final values immediately
-    const usedSeg = document.getElementById('donut-used');
-    const reclaimSeg = document.getElementById('donut-reclaimable');
-    const totalSize = state.smartScanCategories.reduce((sum, c) => sum + c.total_size, 0);
-    const reclaimable = state.smartTotalReclaimable;
-    const used = totalSize - reclaimable;
-    const circumference = 2 * Math.PI * 80;
-    
-    if (usedSeg) usedSeg.style.strokeDashoffset = circumference * (1 - used / totalSize);
-    if (reclaimSeg) reclaimSeg.style.strokeDashoffset = circumference * (1 - reclaimable / totalSize);
+  if (prefersReduced || target === 0) {
+    el.textContent = formatter(target);
     return;
   }
+  const start = performance.now();
+  const tick = (now) => {
+    const t = Math.min(1, (now - start) / ms);
+    const eased = 1 - Math.pow(1 - t, 3); // ease-out cubic
+    el.textContent = formatter(Math.round(target * eased));
+    if (t < 1) requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+}
+
+function animateDonutChart() {
+  const usedSeg = document.getElementById('donut-used');
+  const reclaimSeg = document.getElementById('donut-reclaimable');
+  const totalSize = state.smartScanCategories.reduce((sum, c) => sum + c.total_size, 0);
+  const reclaimable = state.smartTotalReclaimable;
+  const used = Math.max(0, totalSize - reclaimable);
+  const circumference = 2 * Math.PI * 80;
   
-  // Animate
-  setTimeout(() => {
-    const usedSeg = document.getElementById('donut-used');
-    const reclaimSeg = document.getElementById('donut-reclaimable');
-    const totalSize = state.smartScanCategories.reduce((sum, c) => sum + c.total_size, 0);
-    const reclaimable = state.smartTotalReclaimable;
-    const used = totalSize - reclaimable;
-    const circumference = 2 * Math.PI * 80;
-    
+  if (totalSize > 0) {
     if (usedSeg) usedSeg.style.strokeDashoffset = circumference * (1 - used / totalSize);
     if (reclaimSeg) reclaimSeg.style.strokeDashoffset = circumference * (1 - reclaimable / totalSize);
-  }, 100);
+  }
+  
+  // Count-up the reclaimable value
+  animateValue(els.donutReclaimable, reclaimable, formatBytes);
 }
 
 function toggleSmartCategory(category, checked) {
@@ -1007,29 +1044,68 @@ function applyFilters() {
   state.filters.category = cat;
   state.filters.search = search;
 
-  state.filteredFindings = state.findings.filter(f => {
-    if (cat && f.category !== cat) return false;
-    if (search) {
-      const path = f.path.toLowerCase();
-      const reason = f.reason.toLowerCase();
-      if (!path.includes(search) && !reason.includes(search)) return false;
-    }
-    return true;
-  });
-
-  // Sort
+  const findings = state.findings;
+  const index = state.searchIndex;
   const { key, dir } = state.sort;
-  if (key) {
-    const mul = dir === 'asc' ? 1 : -1;
-    state.filteredFindings.sort((a, b) => {
-      switch (key) {
-        case 'size': return (a.size - b.size) * mul;
-        case 'category': return a.category.localeCompare(b.category) * mul;
-        case 'mod_time': return (new Date(a.mod_time).getTime() - new Date(b.mod_time).getTime()) * mul;
-        case 'risk': return a.risk.localeCompare(b.risk) * mul;
-        case 'path': default: return a.path.localeCompare(b.path) * mul;
+
+  // Fast path: no filters — just copy the array reference logic (avoid per-item work)
+  if (!cat && !search) {
+    state.filteredFindings = findings.slice();
+  } else if (index.length === findings.length) {
+    // Use precomputed lowercase index — no toLowerCase() per keystroke
+    const out = [];
+    for (let i = 0; i < findings.length; i++) {
+      const f = findings[i];
+      if (cat && f.category !== cat) continue;
+      if (search) {
+        const ix = index[i];
+        if (!ix.path.includes(search) && !ix.reason.includes(search)) continue;
       }
+      out.push(f);
+    }
+    state.filteredFindings = out;
+  } else {
+    // Fallback (no index yet)
+    state.filteredFindings = findings.filter(f => {
+      if (cat && f.category !== cat) return false;
+      if (search) {
+        const path = f.path.toLowerCase();
+        const reason = f.reason.toLowerCase();
+        if (!path.includes(search) && !reason.includes(search)) return false;
+      }
+      return true;
     });
+  }
+
+  // Sort — use precomputed keys when available
+  const list = state.filteredFindings;
+  if (key && list.length > 1) {
+    const mul = dir === 'asc' ? 1 : -1;
+    const hasIndex = index.length === findings.length;
+    if (key === 'size') {
+      list.sort((a, b) => (a.size - b.size) * mul);
+    } else if (key === 'mod_time') {
+      if (hasIndex) {
+        // Build a lookup for O(1) timestamp access during sort
+        const timeByIdx = new Map();
+        for (let i = 0; i < findings.length; i++) timeByIdx.set(findings[i], index[i].time);
+        list.sort((a, b) => ((timeByIdx.get(a) || 0) - (timeByIdx.get(b) || 0)) * mul);
+      } else {
+        list.sort((a, b) => ((Date.parse(a.mod_time) || 0) - (Date.parse(b.mod_time) || 0)) * mul);
+      }
+    } else if (key === 'category') {
+      list.sort((a, b) => a.category.localeCompare(b.category) * mul);
+    } else if (key === 'risk') {
+      list.sort((a, b) => a.risk.localeCompare(b.risk) * mul);
+    } else { // path
+      if (hasIndex) {
+        const lowerByIdx = new Map();
+        for (let i = 0; i < findings.length; i++) lowerByIdx.set(findings[i], index[i].path);
+        list.sort((a, b) => lowerByIdx.get(a).localeCompare(lowerByIdx.get(b)) * mul);
+      } else {
+        list.sort((a, b) => a.path.localeCompare(b.path) * mul);
+      }
+    }
   }
 
   state.currentPage = 1;
@@ -1045,6 +1121,14 @@ function updateSortIndicators() {
     const label = th.querySelector('.sort-label');
     if (label) label.textContent = arrow;
   });
+}
+
+// Memoized date formatter — avoids re-parsing ISO strings on every re-render
+const _dateCache = new Map();
+function formatDateCached(isoString) {
+  let v = _dateCache.get(isoString);
+  if (v === undefined) { v = formatDate(isoString); _dateCache.set(isoString, v); }
+  return v;
 }
 
 function renderTable() {
@@ -1067,7 +1151,7 @@ function renderTable() {
   <td><span class="cat-badge cat-${f.category}">${categoryIcon(f.category)} ${categoryLabel(f.category)}</span></td>
   <td>${escapeHtml(f.reason)}</td>
   <td><span class="risk-badge ${riskClass(risk)}">${riskLabel(risk)}</span></td>
-  <td>${formatDate(f.mod_time)}</td>
+  <td>${formatDateCached(f.mod_time)}</td>
 </tr>
 `;
   }).join('');
