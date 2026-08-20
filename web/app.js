@@ -777,6 +777,7 @@ async function startSmartScan() {
 
   // Show progress UI
   els.smartProgressSection.classList.remove('hidden');
+  els.smartProgressSection.querySelector('.progress-ring')?.classList.add('scanning');
   els.btnSmartScan.disabled = true;
   state.currentPage = 1;
   state.selectedPaths.clear();
@@ -1329,4 +1330,4 @@ function showToast(message, type = 'info') {
 document.addEventListener('DOMContentLoaded', init);
 
 // Expose for debugging
-window.app = { startScan, stopScan, confirmDelete, hideModal };
+window.app = { startScan, stopScan, confirmDelete, hideModal, showToast };

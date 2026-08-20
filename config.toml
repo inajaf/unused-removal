@@ -1,6 +1,6 @@
-root = "/tmp/ur_big"
-workers = 8
-follow_links = false
+root = "/Users/eldar"
+workers = 4
+follow_links = true
 exclude_dirs = [
     ".Trash",
     "/System",
