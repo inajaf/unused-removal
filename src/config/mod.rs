@@ -7,6 +7,20 @@ use toml;
 use anyhow::Result;
 use dirs;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SafetyLevel {
+    Safe,
+    Balanced,
+    Aggressive,
+}
+
+impl Default for SafetyLevel {
+    fn default() -> Self {
+        SafetyLevel::Balanced
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Config {
@@ -27,9 +41,30 @@ pub struct Config {
     pub junk_dirs: Vec<String>,
     pub check_duplicates: bool,
 
+    // Smart Junk
+    pub smart_junk_enabled: bool,
+    pub scan_user_caches: bool,
+    pub scan_system_logs: bool,
+    pub scan_language_files: bool,
+    pub scan_old_backups: bool,
+    pub scan_mail_attachments: bool,
+    pub scan_trash: bool,
+    pub scan_old_downloads: bool,
+    pub scan_unused_disk_images: bool,
+    pub scan_dev_caches: bool,
+    pub scan_ide_caches: bool,
+    pub scan_large_hidden: bool,
+
+    // Smart Junk Thresholds
+    pub old_download_days: i64,
+    pub unused_disk_image_days: i64,
+    pub large_hidden_bytes: u64,
+    pub min_cache_size_bytes: u64,
+
     // Safety
     pub protect_system: bool,
     pub allow_protected: bool,
+    pub smart_junk_safety_level: SafetyLevel,
 
     // Cache
     pub use_cache: bool,
@@ -85,10 +120,32 @@ impl Config {
                     r"%LOCALAPPDATA%\Mozilla\Firefox\Profiles".to_string(),
                 ],
                 check_duplicates: false,
+                // Smart Junk
+                smart_junk_enabled: true,
+                scan_user_caches: true,
+                scan_system_logs: true,
+                scan_language_files: true,
+                scan_old_backups: true,
+                scan_mail_attachments: true,
+                scan_trash: true,
+                scan_old_downloads: true,
+                scan_unused_disk_images: true,
+                scan_dev_caches: true,
+                scan_ide_caches: true,
+                scan_large_hidden: true,
+                // Smart Junk Thresholds
+                old_download_days: 30,
+                unused_disk_image_days: 60,
+                large_hidden_bytes: 50 * 1024 * 1024,     // 50 MB
+                min_cache_size_bytes: 10 * 1024 * 1024,   // 10 MB
+                // Safety
                 protect_system: true,
                 allow_protected: false,
+                smart_junk_safety_level: SafetyLevel::Balanced,
+                // Cache
                 use_cache: true,
                 cache_dir: "".to_string(),
+                // Web
                 web_port: 0,
             }
         }
@@ -131,10 +188,32 @@ impl Config {
                     "$HOME/Library/Logs".to_string(),
                 ],
                 check_duplicates: false,
+                // Smart Junk
+                smart_junk_enabled: true,
+                scan_user_caches: true,
+                scan_system_logs: true,
+                scan_language_files: true,
+                scan_old_backups: true,
+                scan_mail_attachments: true,
+                scan_trash: true,
+                scan_old_downloads: true,
+                scan_unused_disk_images: true,
+                scan_dev_caches: true,
+                scan_ide_caches: true,
+                scan_large_hidden: true,
+                // Smart Junk Thresholds
+                old_download_days: 30,
+                unused_disk_image_days: 60,
+                large_hidden_bytes: 50 * 1024 * 1024,     // 50 MB
+                min_cache_size_bytes: 10 * 1024 * 1024,   // 10 MB
+                // Safety
                 protect_system: true,
                 allow_protected: false,
+                smart_junk_safety_level: SafetyLevel::Balanced,
+                // Cache
                 use_cache: true,
                 cache_dir: "".to_string(),
+                // Web
                 web_port: 0,
             }
         }
@@ -174,10 +253,32 @@ impl Config {
                     "$HOME/.local/share/Trash".to_string(),
                 ],
                 check_duplicates: false,
+                // Smart Junk
+                smart_junk_enabled: true,
+                scan_user_caches: true,
+                scan_system_logs: true,
+                scan_language_files: true,
+                scan_old_backups: true,
+                scan_mail_attachments: true,
+                scan_trash: true,
+                scan_old_downloads: true,
+                scan_unused_disk_images: true,
+                scan_dev_caches: true,
+                scan_ide_caches: true,
+                scan_large_hidden: true,
+                // Smart Junk Thresholds
+                old_download_days: 30,
+                unused_disk_image_days: 60,
+                large_hidden_bytes: 50 * 1024 * 1024,     // 50 MB
+                min_cache_size_bytes: 10 * 1024 * 1024,   // 10 MB
+                // Safety
                 protect_system: true,
                 allow_protected: false,
+                smart_junk_safety_level: SafetyLevel::Balanced,
+                // Cache
                 use_cache: true,
                 cache_dir: "".to_string(),
+                // Web
                 web_port: 0,
             }
         }
@@ -243,10 +344,32 @@ impl Config {
         merge_field!(junk_extensions, Self::default().junk_extensions);
         merge_field!(junk_dirs, Self::default().junk_dirs);
         merge_field!(check_duplicates, Self::default().check_duplicates);
+        // Smart Junk
+        merge_field!(smart_junk_enabled, Self::default().smart_junk_enabled);
+        merge_field!(scan_user_caches, Self::default().scan_user_caches);
+        merge_field!(scan_system_logs, Self::default().scan_system_logs);
+        merge_field!(scan_language_files, Self::default().scan_language_files);
+        merge_field!(scan_old_backups, Self::default().scan_old_backups);
+        merge_field!(scan_mail_attachments, Self::default().scan_mail_attachments);
+        merge_field!(scan_trash, Self::default().scan_trash);
+        merge_field!(scan_old_downloads, Self::default().scan_old_downloads);
+        merge_field!(scan_unused_disk_images, Self::default().scan_unused_disk_images);
+        merge_field!(scan_dev_caches, Self::default().scan_dev_caches);
+        merge_field!(scan_ide_caches, Self::default().scan_ide_caches);
+        merge_field!(scan_large_hidden, Self::default().scan_large_hidden);
+        // Smart Junk Thresholds
+        merge_field!(old_download_days, Self::default().old_download_days);
+        merge_field!(unused_disk_image_days, Self::default().unused_disk_image_days);
+        merge_field!(large_hidden_bytes, Self::default().large_hidden_bytes);
+        merge_field!(min_cache_size_bytes, Self::default().min_cache_size_bytes);
+        // Safety
         merge_field!(protect_system, Self::default().protect_system);
         merge_field!(allow_protected, Self::default().allow_protected);
+        merge_field!(smart_junk_safety_level, Self::default().smart_junk_safety_level);
+        // Cache
         merge_field!(use_cache, Self::default().use_cache);
         merge_field!(cache_dir, Self::default().cache_dir);
+        // Web
         merge_field!(web_port, Self::default().web_port);
     }
 
@@ -354,6 +477,19 @@ impl Config {
         if self.stale_install_days <= 0 {
             self.stale_install_days = 90;
         }
+        // Smart Junk Thresholds
+        if self.old_download_days <= 0 {
+            self.old_download_days = 30;
+        }
+        if self.unused_disk_image_days <= 0 {
+            self.unused_disk_image_days = 60;
+        }
+        if self.large_hidden_bytes == 0 {
+            self.large_hidden_bytes = 50 * 1024 * 1024;
+        }
+        if self.min_cache_size_bytes == 0 {
+            self.min_cache_size_bytes = 10 * 1024 * 1024;
+        }
         if self.web_port == 0 {
             self.web_port = 8080;
         }
@@ -369,6 +505,21 @@ impl Config {
 
     pub fn stale_install_cutoff(&self) -> chrono::DateTime<chrono::Utc> {
         chrono::Utc::now() - chrono::Duration::days(self.stale_install_days)
+    }
+
+    /// Minimum cache size in bytes for detection
+    pub fn min_cache_size_bytes(&self) -> u64 {
+        self.min_cache_size_bytes
+    }
+
+    /// Old download cutoff date
+    pub fn old_download_cutoff(&self) -> chrono::DateTime<chrono::Utc> {
+        chrono::Utc::now() - chrono::Duration::days(self.old_download_days)
+    }
+
+    /// Unused disk image cutoff date
+    pub fn unused_disk_image_cutoff(&self) -> chrono::DateTime<chrono::Utc> {
+        chrono::Utc::now() - chrono::Duration::days(self.unused_disk_image_days)
     }
 }
 

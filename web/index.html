@@ -10,6 +10,7 @@
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 </head>
 <body>
+<a href="#main-content" class="skip-link">Перейти к основному содержанию</a>
 <div class="app">
 <header class="header">
 <div class="header-content">
@@ -28,9 +29,69 @@
 </div>
 </header>
 
-<main class="main">
+<main class="main" id="main-content">
+<!-- Phase 0: Smart Scan (One-click cleanup) -->
+<section id="smart-scan-phase" class="panel phase-panel" data-phase="smart-scan">
+<header class="panel-header">
+<h2><span class="step-number">★</span> Умная очистка</h2>
+<p class="panel-desc">Автоматический поиск и удаление мусора одной кнопкой — как в CleanMyMac</p>
+</header>
+
+<div class="smart-scan-hero">
+<div class="smart-scan-icon" aria-hidden="true">
+<svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+<circle cx="11" cy="11" r="8"/>
+<line x1="21" y1="21" x2="16.65" y2="16.65"/>
+<path d="M11 8v3M11 14v0.01"/>
+</svg>
+</div>
+<h3>Освободите место за секунды</h3>
+<p class="smart-scan-subtitle">Сканирует кэши браузеров, логи, временные файлы, старые загрузки, кэши разработчика и корзину</p>
+
+<div class="smart-scan-safety">
+<label class="safety-selector tooltip" data-tooltip="Выберите уровень агрессивности очистки. Безопасный — только очевидный мусор. Сбалансированный — рекомендуется для большинства. Агрессивный — максимальное освобождение места.">
+<span class="safety-label">Уровень безопасности</span>
+<select id="smart-safety-level">
+<option value="safe">🛡️ Безопасный — только кэши, логи, корзина, старые загрузки</option>
+<option value="balanced" selected>⚖️ Сбалансированный — + языки, бэкапы, вложения почты</option>
+<option value="aggressive">🔥 Агрессивный — всё включенное + образы дисков, скрытые файлы, дубликаты</option>
+</select>
+</label>
+</div>
+
+<div class="smart-scan-actions">
+<button id="btn-smart-scan" class="btn btn-primary btn-xl">
+<svg class="btn-icon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+<span>Запустить умную очистку</span>
+</button>
+<button id="btn-smart-advanced" class="btn btn-secondary btn-lg" onclick="setPhase('config')">
+<span>Расширенные настройки</span>
+</button>
+</div>
+
+<div id="smart-scan-progress" class="smart-scan-progress hidden">
+<div class="progress-ring" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">
+<svg class="progress-ring-svg" viewBox="0 0 110 110">
+<defs>
+<linearGradient id="smartRingGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+<stop offset="0%" stop-color="#22c55e"/>
+<stop offset="100%" stop-color="#16a34a"/>
+</linearGradient>
+</defs>
+<circle class="progress-ring-bg" cx="55" cy="55" r="49" fill="none" stroke-width="6"/>
+<circle id="smart-progress-ring-fill" class="progress-ring-fill" cx="55" cy="55" r="49" fill="none" stroke-width="6" stroke-linecap="round" stroke="url(#smartRingGradient)" stroke-dasharray="308" stroke-dashoffset="308"/>
+</svg>
+<div class="progress-ring-text">
+<span id="smart-progress-percent">0</span><span class="progress-percent-label">%</span>
+</div>
+</div>
+<p id="smart-progress-desc">Подготовка…</p>
+</div>
+</div>
+</section>
+
 <!-- Phase 1: Configuration -->
-<section id="config-phase" class="panel phase-panel" data-phase="config">
+<section id="config-phase" class="panel phase-panel hidden" data-phase="config">
 <header class="panel-header">
 <h2><span class="step-number">1</span> Настройка сканирования</h2>
 <p class="panel-desc">Выберите диск или папку и настройте параметры поиска</p>
@@ -173,7 +234,84 @@
 </div>
 </section>
 
-<!-- Phase 3: Results -->
+<!-- Phase 3: Smart Results (Category Cards + Donut Chart) -->
+<section id="smart-results-phase" class="panel phase-panel hidden" data-phase="smart-results">
+<header class="panel-header">
+<h2><span class="step-number">★</span> Результаты умной очистки</h2>
+<p class="panel-desc">Найдено <strong id="smart-summary-total">0</strong> файлов, можно освободить <strong id="smart-summary-size">0 B</strong></p>
+</header>
+
+<div class="smart-results-toolbar">
+<div class="safety-selector-toolbar">
+<label class="safety-selector tooltip" data-tooltip="Измените уровень безопасности для повторной фильтрации результатов. Безопасный — только очевидный мусор. Сбалансированный — рекомендуется. Агрессивный — включает образы дисков, скрытые файлы, дубликаты.">
+<span class="safety-label">Безопасность</span>
+<select id="smart-results-safety">
+<option value="safe">🛡️ Безопасный</option>
+<option value="balanced" selected>⚖️ Сбалансированный</option>
+<option value="aggressive">🔥 Агрессивный</option>
+</select>
+</label>
+</div>
+<div class="smart-summary-actions">
+<button id="btn-smart-clean-all" class="btn btn-primary btn-lg">
+<svg class="btn-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+<span>Очистить выбранное</span>
+</button>
+<button id="btn-smart-review" class="btn btn-secondary btn-lg">
+<span>Просмотреть детально</span>
+</button>
+</div>
+</div>
+
+<!-- Space Visualization Donut Chart -->
+<div class="space-viz">
+<div class="donut-chart" role="img" aria-label="Disk space visualization">
+<svg class="donut-svg" viewBox="0 0 200 200">
+<defs>
+<linearGradient id="donutGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+<stop offset="0%" stop-color="#6366f1"/>
+<stop offset="100%" stop-color="#a855f7"/>
+</linearGradient>
+<linearGradient id="donutGradientFree" x1="0%" y1="0%" x2="100%" y2="100%">
+<stop offset="0%" stop-color="#22c55e"/>
+<stop offset="100%" stop-color="#16a34a"/>
+</linearGradient>
+</defs>
+<circle class="donut-bg" cx="100" cy="100" r="80" fill="none" stroke-width="16" stroke="#262b33"/>
+<circle id="donut-used" class="donut-segment" cx="100" cy="100" r="80" fill="none" stroke-width="16" stroke="url(#donutGradient)" stroke-dasharray="502.65" stroke-dashoffset="502.65" stroke-linecap="round"/>
+<circle id="donut-reclaimable" class="donut-segment" cx="100" cy="100" r="80" fill="none" stroke-width="16" stroke="url(#donutGradientFree)" stroke-dasharray="502.65" stroke-dashoffset="502.65" stroke-linecap="round"/>
+</svg>
+<div class="donut-center">
+<span id="donut-reclaimable-text" class="donut-value">0 B</span>
+<span class="donut-label">можно освободить</span>
+</div>
+</div>
+<div class="space-legend">
+<div class="legend-item">
+<span class="legend-color" style="background: linear-gradient(135deg, #6366f1, #a855f7)"></span>
+<span class="legend-text">Занято</span>
+</div>
+<div class="legend-item">
+<span class="legend-color" style="background: linear-gradient(135deg, #22c55e, #16a34a)"></span>
+<span class="legend-text">Мусор</span>
+</div>
+</div>
+</div>
+
+<!-- Category Cards Grid -->
+<div class="category-cards" id="category-cards" role="list" aria-label="Категории мусора">
+<!-- Populated by JS -->
+</div>
+
+<div class="smart-results-footer">
+<button id="btn-back-to-smart" class="btn btn-secondary" onclick="setPhase('smart-scan')">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+Назад к умной очистке
+</button>
+</div>
+</section>
+
+<!-- Phase 4: Detailed Results (Traditional Table) -->
 <section id="results-phase" class="panel phase-panel hidden" data-phase="results">
 <header class="panel-header">
 <h2><span class="step-number">3</span> Результаты</h2>
@@ -194,6 +332,18 @@
 <option value="stale">Не использовались давно</option>
 <option value="duplicate">Дубликаты</option>
 <option value="app_leftovers">Следы приложений</option>
+<option value="user_cache">Кэш пользователя</option>
+<option value="system_log">Системные логи</option>
+<option value="dev_cache">Кэш разработчика</option>
+<option value="xcode_cache">Xcode кэш</option>
+<option value="vscode_cache">VS Code кэш</option>
+<option value="trash">Корзина</option>
+<option value="old_download">Старые загрузки</option>
+<option value="language_file">Файлы локализации</option>
+<option value="old_backup">Старые бэкапы</option>
+<option value="mail_attachment">Вложения почты</option>
+<option value="unused_disk_image">Образы дисков</option>
+<option value="large_hidden">Скрытые файлы</option>
 </select>
 </div>
 <div class="filter-group search-group">

@@ -262,6 +262,18 @@ fn category_icon(cat: Category) -> &'static str {
         Category::Stale => "⏳",
         Category::Duplicate => "🔁",
         Category::AppLeftovers => "📦",
+        Category::UserCache => "💾",
+        Category::SystemLog => "📋",
+        Category::LanguageFile => "🌐",
+        Category::OldBackup => "💿",
+        Category::MailAttachment => "📎",
+        Category::Trash => "🗑️",
+        Category::OldDownload => "⬇️",
+        Category::UnusedDiskImage => "💿",
+        Category::DevCache => "⚙️",
+        Category::XcodeCache => "🛠️",
+        Category::VSCodeCache => "💻",
+        Category::LargeHidden => "🔍",
     }
 }
 
@@ -364,4 +376,286 @@ fn create_fixture(root: &Path, total_files: usize, depth: usize) -> Result<()> {
     let total = total_files.max(1);
     create_dir_recursive(root, 0, depth.min(4), per_dir, total, &counter)?;
     Ok(())
+}
+
+/// Run smart clean command (one-click junk cleanup like CleanMyMac)
+pub fn smart_clean_cmd(
+    config: &Config,
+    dry_run: bool,
+    yes: bool,
+    json_out: Option<String>,
+    csv_out: Option<String>,
+) -> Result<()> {
+    if !config.smart_junk_enabled {
+        println!("{}", "Smart junk detection is disabled in config".yellow());
+        return Ok(());
+    }
+
+    println!("{}", "🧹 Smart Junk Cleanup".bold().cyan());
+    println!("  Root: {}", config.root.yellow());
+    println!("  Safety: {:?}", config.smart_junk_safety_level);
+    println!("  Dry run: {}", if dry_run { "yes" } else { "no" }.to_string().yellow());
+
+    let start = Instant::now();
+
+    // Progress bar
+    let multi = MultiProgress::new();
+    let pb = multi.add(ProgressBar::new_spinner());
+    pb.set_style(
+        ProgressStyle::default_spinner()
+            .template("{spinner:.green} {msg}")
+            .unwrap()
+    );
+    pb.enable_steady_tick(std::time::Duration::from_millis(100));
+
+    let progress = ScannerProgress::new();
+    let progress_clone = progress.clone();
+
+    // Spawn progress updater
+    let pb_for_thread = pb.clone();
+    let progress_handle = std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            let snap = progress_clone.snapshot();
+            if snap.finished { break; }
+            let msg = format!(
+                "{} files, {} · {:.0} files/s",
+                format_number(snap.files),
+                format_bytes(snap.bytes as u64),
+                snap.rate_fps
+            );
+            if snap.cached > 0 {
+                pb_for_thread.set_message(format!("{} · {} from cache", msg, format_number(snap.cached)));
+            } else {
+                pb_for_thread.set_message(msg);
+            }
+        }
+    });
+
+    // Scanner options
+    let opts = Options {
+        workers: config.workers,
+        follow_links: config.follow_links,
+        exclude: config.exclude_dirs.clone(),
+        exclude_pref: config.exclude_prefix.clone(),
+    };
+
+    // Cache
+    let cache: Option<Arc<dyn Cache>> = if config.use_cache {
+        let hash = cache_config_hash(&opts);
+        BoltCache::new("unused-removal", &hash).ok().map(|c| Arc::new(c) as Arc<dyn Cache>)
+    } else {
+        None
+    };
+
+    let scanner = Scanner::new(opts, progress, cache);
+
+    // Run scan in blocking task
+    let (records, errors) = scanner.walk(&config.root)?;
+
+    pb.finish_and_clear();
+    progress_handle.join().unwrap();
+
+    println!("\n{}", "Analyzing...".bold().cyan());
+
+    // Rules engine
+    let engine = Engine::new(std::sync::Arc::new(config.clone()));
+    let mut findings = engine.analyze(&records);
+
+    if config.check_duplicates {
+        let dups = engine.find_duplicates(&records);
+        findings.extend(dups);
+    }
+
+    // Sort by size descending
+    findings.sort_by(|a, b| b.size.cmp(&a.size));
+
+    let elapsed = start.elapsed().as_secs_f64();
+    println!(
+        "\n{} {:.2}s. Files: {}, Findings: {}, Errors: {}",
+        "Done in".green(),
+        elapsed,
+        format_number(records.len() as i64),
+        findings.len(),
+        errors.len()
+    );
+
+    // Filter findings based on safety level
+    let findings = filter_by_safety(findings, config);
+
+    // Print summary by category
+    print_smart_summary(&findings);
+
+    if findings.is_empty() {
+        println!("\n{}", "✨ No junk found to clean!".green());
+        return Ok(());
+    }
+
+    // Calculate total reclaimable space
+    let total_reclaimable: u64 = findings.iter().map(|f| f.size as u64).sum();
+    println!("\n{}", format!("Total reclaimable: {}", format_bytes(total_reclaimable)).bold().green());
+
+    if dry_run {
+        println!("\n{}", "🔍 Dry run mode - no files were deleted".yellow());
+    } else {
+        // Confirm deletion
+        if !yes {
+            println!("\n{}", "⚠️  This will move files to Trash/Recycle Bin.".yellow());
+            print!("Continue? [y/N]: ");
+            use std::io::{stdin, stdout, Write};
+            stdout().flush()?;
+            let mut input = String::new();
+            stdin().read_line(&mut input)?;
+            if !input.trim().eq_ignore_ascii_case("y") {
+                println!("{}", "Cancelled.".yellow());
+                return Ok(());
+            }
+        }
+
+        // Perform deletion
+        println!("\n{}", "Deleting files...".bold().cyan());
+        let paths: Vec<String> = findings.iter().map(|f| f.path.clone()).collect();
+        let result = crate::cleaner::recycle_bin(&paths)?;
+
+        println!(
+            "{} Deleted: {}, Failed: {}, Freed: {}",
+            "✓".green(),
+            result.deleted.len(),
+            result.failed.len(),
+            format_bytes(result.total_bytes)
+        );
+
+        if !result.failed.is_empty() {
+            println!("\n{}", "Failed deletions:".red());
+            for err in &result.failed {
+                println!("  {} - {}", err.path, err.error);
+            }
+        }
+    }
+
+    // Export
+    if let Some(path) = json_out {
+        write_json(&path, &findings)?;
+        println!("\n{} JSON report saved to {}", "✓".green(), path);
+    }
+    if let Some(path) = csv_out {
+        write_csv(&path, &findings)?;
+        println!("{} CSV report saved to {}", "✓".green(), path);
+    }
+
+    Ok(())
+}
+
+/// Filter findings based on safety level
+fn filter_by_safety(findings: Vec<Finding>, config: &Config) -> Vec<Finding> {
+    use crate::config::SafetyLevel;
+    use crate::rules::Category;
+
+    let safety = config.smart_junk_safety_level;
+
+    // Categories allowed per safety level
+    let allowed_categories: Vec<Category> = match safety {
+        SafetyLevel::Safe => vec![
+            Category::Junk,
+            Category::UserCache,
+            Category::SystemLog,
+            Category::Trash,
+            Category::OldDownload,
+            Category::DevCache,
+            Category::XcodeCache,
+            Category::VSCodeCache,
+            Category::OldLog,
+            Category::StaleInstall,
+        ],
+        SafetyLevel::Balanced => vec![
+            Category::Junk,
+            Category::UserCache,
+            Category::SystemLog,
+            Category::Trash,
+            Category::OldDownload,
+            Category::DevCache,
+            Category::XcodeCache,
+            Category::VSCodeCache,
+            Category::OldLog,
+            Category::StaleInstall,
+            Category::LanguageFile,
+            Category::OldBackup,
+            Category::MailAttachment,
+        ],
+        SafetyLevel::Aggressive => vec![
+            Category::Junk,
+            Category::UserCache,
+            Category::SystemLog,
+            Category::Trash,
+            Category::OldDownload,
+            Category::DevCache,
+            Category::XcodeCache,
+            Category::VSCodeCache,
+            Category::OldLog,
+            Category::StaleInstall,
+            Category::LanguageFile,
+            Category::OldBackup,
+            Category::MailAttachment,
+            Category::UnusedDiskImage,
+            Category::LargeHidden,
+            Category::Stale,
+            Category::Duplicate,
+            Category::AppLeftovers,
+        ],
+    };
+
+    findings.into_iter()
+        .filter(|f| allowed_categories.contains(&f.category))
+        .collect()
+}
+
+/// Print smart cleanup summary
+fn print_smart_summary(findings: &[Finding]) {
+    use std::collections::HashMap;
+    use crate::rules::Category;
+
+    let mut by_cat: HashMap<Category, (usize, u64)> = HashMap::new();
+    for f in findings {
+        let entry = by_cat.entry(f.category).or_insert((0, 0));
+        entry.0 += 1;
+        entry.1 += f.size as u64;
+    }
+
+    println!("\n{}", "Findings by category:".bold());
+    println!("{:<25} {:>8} {:>12} {}", "Category", "Count", "Size", "Risk");
+    println!("{}", "─".repeat(55));
+
+    let order = [
+        Category::UserCache,
+        Category::SystemLog,
+        Category::DevCache,
+        Category::XcodeCache,
+        Category::VSCodeCache,
+        Category::Trash,
+        Category::OldDownload,
+        Category::Junk,
+        Category::OldLog,
+        Category::StaleInstall,
+        Category::LanguageFile,
+        Category::OldBackup,
+        Category::MailAttachment,
+        Category::UnusedDiskImage,
+        Category::LargeHidden,
+        Category::Stale,
+        Category::Duplicate,
+        Category::AppLeftovers,
+        Category::Huge,
+        Category::Large,
+    ];
+
+    for cat in order {
+        if let Some((count, size)) = by_cat.get(&cat) {
+            let icon = category_icon(cat);
+            let risk_str = match cat {
+                Category::Junk | Category::UserCache | Category::SystemLog | Category::Trash | Category::OldDownload | Category::DevCache | Category::XcodeCache | Category::VSCodeCache | Category::OldLog | Category::StaleInstall | Category::LanguageFile | Category::MailAttachment => "Safe",
+                Category::OldBackup | Category::UnusedDiskImage | Category::LargeHidden | Category::Stale | Category::Duplicate | Category::AppLeftovers | Category::Huge | Category::Large => "Caution",
+            };
+            println!("{} {:<23} {:>8} {:>12} {}", icon, format!("{:?}", cat), count, format_bytes(*size), risk_str);
+        }
+    }
 }

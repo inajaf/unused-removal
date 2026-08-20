@@ -10,7 +10,20 @@ const Category = {
   STALE_INSTALL: 'stale_install',
   STALE: 'stale',
   DUPLICATE: 'duplicate',
-  APP_LEFTOVERS: 'app_leftovers'
+  APP_LEFTOVERS: 'app_leftovers',
+  // Smart Junk categories
+  USER_CACHE: 'user_cache',
+  SYSTEM_LOG: 'system_log',
+  LANGUAGE_FILE: 'language_file',
+  OLD_BACKUP: 'old_backup',
+  MAIL_ATTACHMENT: 'mail_attachment',
+  TRASH: 'trash',
+  OLD_DOWNLOAD: 'old_download',
+  UNUSED_DISK_IMAGE: 'unused_disk_image',
+  DEV_CACHE: 'dev_cache',
+  XCODE_CACHE: 'xcode_cache',
+  VSCODE_CACHE: 'vscode_cache',
+  LARGE_HIDDEN: 'large_hidden'
 };
 
 const Risk = {
@@ -19,9 +32,78 @@ const Risk = {
   PROTECTED: 'protected'
 };
 
+// Smart Junk Safety Levels
+const SafetyLevel = {
+  SAFE: 'safe',
+  BALANCED: 'balanced',
+  AGGRESSIVE: 'aggressive'
+};
+
+// Category icons mapping
+const CATEGORY_ICONS = {
+  huge: '🔴',
+  large: '🟠',
+  junk: '🗑',
+  old_log: '📄',
+  stale_install: '📦',
+  stale: '⏳',
+  duplicate: '🔁',
+  app_leftovers: '📦',
+  user_cache: '💾',
+  system_log: '📋',
+  language_file: '🌐',
+  old_backup: '💿',
+  mail_attachment: '📎',
+  trash: '🗑️',
+  old_download: '⬇️',
+  unused_disk_image: '💿',
+  dev_cache: '⚙️',
+  xcode_cache: '🛠️',
+  vscode_cache: '💻',
+  large_hidden: '🔍'
+};
+
+// Category descriptions
+const CATEGORY_DESCRIPTIONS = {
+  huge: 'Очень крупные файлы',
+  large: 'Крупные файлы',
+  junk: 'Временные и мусорные файлы',
+  old_log: 'Старые лог-файлы',
+  stale_install: 'Старые инсталляторы',
+  stale: 'Не используемые давно',
+  duplicate: 'Дубликаты',
+  app_leftovers: 'Следы удалённых приложений',
+  user_cache: 'Кэш браузеров и приложений',
+  system_log: 'Системные и приложения логи',
+  language_file: 'Неиспользуемые локализации',
+  old_backup: 'Старые бэкапы (iOS, Time Machine, Windows)',
+  mail_attachment: 'Старые вложения почты',
+  trash: 'Корзина / Recycle Bin',
+  old_download: 'Старые файлы в Загрузках',
+  unused_disk_image: 'Неиспользуемые образы дисков',
+  dev_cache: 'Кэш инструментов разработки (npm, cargo, pip, gradle)',
+  xcode_cache: 'Xcode DerivedData, Archives, DeviceSupport',
+  vscode_cache: 'VS Code / Cursor кэш и логи',
+  large_hidden: 'Большие скрытые файлы'
+};
+
+// Safety level descriptions
+const SAFETY_DESCRIPTIONS = {
+  safe: 'Только кэши, логи, корзина, старые загрузки — максимальная безопасность',
+  balanced: '+ языки, бэкапы, вложения почты — рекомендуемый баланс',
+  aggressive: 'Всё включённое + образы дисков, скрытые файлы, дубликаты — максимальное освобождение'
+};
+
+// Categories allowed per safety level
+const SAFETY_CATEGORIES = {
+  safe: ['junk', 'user_cache', 'system_log', 'trash', 'old_download', 'dev_cache', 'xcode_cache', 'vscode_cache', 'old_log', 'stale_install'],
+  balanced: ['junk', 'user_cache', 'system_log', 'trash', 'old_download', 'dev_cache', 'xcode_cache', 'vscode_cache', 'old_log', 'stale_install', 'language_file', 'old_backup', 'mail_attachment'],
+  aggressive: ['junk', 'user_cache', 'system_log', 'trash', 'old_download', 'dev_cache', 'xcode_cache', 'vscode_cache', 'old_log', 'stale_install', 'language_file', 'old_backup', 'mail_attachment', 'unused_disk_image', 'large_hidden', 'stale', 'duplicate', 'app_leftovers', 'huge', 'large']
+};
+
 // ===== State =====
 const state = {
-  phase: 'config',
+  phase: 'smart-scan',
   scanId: 0,
   findings: [],
   filteredFindings: [],
@@ -31,7 +113,12 @@ const state = {
   totalPages: 1,
   sort: { key: 'size', dir: 'desc' },
   filters: { category: '', search: '' },
-  pendingDeleteMode: null
+  pendingDeleteMode: null,
+  // Smart scan state
+  smartScanCategories: [],
+  smartSelectedCategories: new Set(),
+  smartSafetyLevel: 'balanced',
+  smartTotalReclaimable: 0
 };
 
 // ===== DOM Elements =====
@@ -197,7 +284,11 @@ const api = {
     const res = await fetch(`${API_BASE}/export?format=${format}`);
     if (!res.ok) throw new Error(`Export failed: ${res.statusText}`);
     return res.blob();
-  }
+  },
+  // Smart Scan API
+  startSmartScan: () => request('/smart-scan', { method: 'POST' }),
+  getSmartCategories: () => request('/smart-categories'),
+  smartClean: (categories, mode) => request('/smart-clean', { method: 'POST', body: JSON.stringify({ categories, mode }) })
 };
 
 // ===== Initialization =====
@@ -219,9 +310,20 @@ function cacheElements() {
   els.btnScan = document.getElementById('btn-scan');
   els.btnStop = document.getElementById('btn-stop');
 
+  // Smart Scan phase
+  els.smartScanSection = document.getElementById('smart-scan-phase');
+  els.smartProgressSection = document.getElementById('smart-scan-progress');
+  els.smartProgressRingFill = document.querySelector('#smart-progress-ring-fill');
+  els.smartProgressPercent = document.getElementById('smart-progress-percent');
+  els.smartProgressDesc = document.getElementById('smart-progress-desc');
+  els.smartSafetyLevel = document.getElementById('smart-safety-level');
+  els.btnSmartScan = document.getElementById('btn-smart-scan');
+  els.btnSmartAdvanced = document.getElementById('btn-smart-advanced');
+
   // Progress phase
   els.progressSection = document.getElementById('progress-phase');
   els.resultsSection = document.getElementById('results-phase');
+  els.smartResultsSection = document.getElementById('smart-results-phase');
   els.configSection = document.getElementById('config-phase');
   els.progressRingFill = document.querySelector('#progress-ring-fill');
   els.progressPercent = document.getElementById('progress-percent');
@@ -234,6 +336,17 @@ function cacheElements() {
   els.statCurrent = document.getElementById('stat-current');
   els.recentFiles = document.getElementById('recent-files');
   els.btnStopProgress = document.getElementById('btn-stop-progress');
+
+  // Smart Results phase
+  els.smartSummaryTotal = document.getElementById('smart-summary-total');
+  els.smartSummarySize = document.getElementById('smart-summary-size');
+  els.smartResultsSafety = document.getElementById('smart-results-safety');
+  els.categoryCards = document.getElementById('category-cards');
+  els.btnSmartCleanAll = document.getElementById('btn-smart-clean-all');
+  els.btnSmartReview = document.getElementById('btn-smart-review');
+  els.donutReclaimable = document.getElementById('donut-reclaimable-text');
+  els.donutUsed = document.getElementById('donut-used');
+  els.donutReclaimableSeg = document.getElementById('donut-reclaimable');
 
   // Results phase
   els.filterCategory = document.getElementById('filter-category');
@@ -270,6 +383,19 @@ function bindEvents() {
     if (show) els.rootCustom.focus();
   });
 
+  // Smart Scan events
+  els.btnSmartScan.addEventListener('click', startSmartScan);
+  els.btnSmartAdvanced.addEventListener('click', () => setPhase('config'));
+  els.smartSafetyLevel.addEventListener('change', (e) => {
+    state.smartSafetyLevel = e.target.value;
+  });
+  els.smartResultsSafety.addEventListener('change', (e) => {
+    state.smartSafetyLevel = e.target.value;
+    applySmartSafetyFilter();
+  });
+  els.btnSmartCleanAll.addEventListener('click', executeSmartClean);
+  els.btnSmartReview.addEventListener('click', () => setPhase('results'));
+
   els.btnScan.addEventListener('click', startScan);
   els.btnStop.addEventListener('click', stopScan);
   if (els.btnStopProgress) els.btnStopProgress.addEventListener('click', stopScan);
@@ -303,7 +429,7 @@ function bindEvents() {
   // Keyboard shortcuts
   document.addEventListener('keydown', (e) => {
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
-    if (state.phase === 'results') {
+    if (state.phase === 'results' || state.phase === 'smart-results') {
       if (e.key === ' ') { e.preventDefault(); toggleRowSelection(); }
       else if (e.key === 't') confirmDelete('recycle');
       else if (e.key === 'x') confirmDelete('hard');
@@ -377,6 +503,8 @@ function setPhase(phase) {
   state.phase = phase;
   const isScanning = phase === 'scanning';
   const isResults = phase === 'results';
+  const isSmartResults = phase === 'smart-results';
+  const isSmartScan = phase === 'smart-scan';
   const isDeleting = phase === 'deleting';
 
   els.btnScan.disabled = isScanning || isDeleting;
@@ -386,7 +514,9 @@ function setPhase(phase) {
   const sections = {
     config: els.configSection,
     scanning: els.progressSection,
-    results: els.resultsSection
+    results: els.resultsSection,
+    'smart-scan': els.smartScanSection,
+    'smart-results': els.smartResultsSection
   };
 
   const prevSection = sections[prevPhase];
@@ -412,6 +542,27 @@ function setPhase(phase) {
 
   if (isResults) {
     triggerRowAnimations(els.resultsBody);
+  }
+
+  if (isSmartResults) {
+    // Initialize safety selector
+    els.smartResultsSafety.value = state.smartSafetyLevel;
+    renderCategoryCards();
+    animateDonutChart();
+  }
+
+  if (isSmartScan) {
+    // Reset smart scan progress
+    els.smartProgressSection.classList.add('hidden');
+    els.btnSmartScan.disabled = false;
+    els.smartProgressPercent.textContent = '0';
+    els.smartProgressDesc.textContent = 'Подготовка…';
+    const ring = els.smartProgressRingFill;
+    if (ring) {
+      const CIRC = 2 * Math.PI * 49;
+      ring.style.strokeDasharray = String(CIRC);
+      ring.style.strokeDashoffset = String(CIRC);
+    }
   }
 }
 
@@ -537,6 +688,262 @@ async function loadResults() {
     showToast('Ошибка загрузки результатов: ' + e.message, 'error');
     setPhase('config');
   }
+}
+
+// ===== Smart Scan Phase =====
+let smartProgressPollTimer = null;
+
+async function startSmartScan() {
+  const root = els.rootSelect.value === 'custom' ? els.rootCustom.value.trim() : els.rootSelect.value;
+  if (!root) { showToast('Выберите или введите путь для сканирования', 'warning'); return; }
+
+  // Update config with smart scan settings
+  const config = {
+    root,
+    workers: parseInt(els.workers.value) || 0,
+    follow_links: els.followLinks.checked,
+    use_cache: els.useCache.checked,
+    check_duplicates: true, // Always enable for smart scan
+    protect_system: els.protectSystem.checked,
+    // Enable all smart junk categories
+    smart_junk_enabled: true,
+    scan_user_caches: true,
+    scan_system_logs: true,
+    scan_language_files: true,
+    scan_old_backups: true,
+    scan_mail_attachments: true,
+    scan_trash: true,
+    scan_old_downloads: true,
+    scan_unused_disk_images: true,
+    scan_dev_caches: true,
+    scan_ide_caches: true,
+    scan_large_hidden: true,
+    smart_junk_safety_level: state.smartSafetyLevel
+  };
+
+  api.saveConfig(config).catch(e => console.warn('Config save failed:', e));
+
+  // Show progress UI
+  els.smartProgressSection.classList.remove('hidden');
+  els.btnSmartScan.disabled = true;
+  state.currentPage = 1;
+  state.selectedPaths.clear();
+  state.smartSelectedCategories.clear();
+
+  try {
+    const res = await api.startSmartScan();
+    state.scanId = res.scan_id;
+    pollSmartProgress();
+  } catch (e) {
+    const msg = e && e.message ? e.message : String(e);
+    const hint = msg.includes('Failed to fetch')
+      ? 'Сервер недоступен. Запустите: unused-removal serve'
+      : msg;
+    showToast('Ошибка запуска: ' + hint, 'error');
+    setPhase('smart-scan');
+  }
+}
+
+function pollSmartProgress() {
+  if (smartProgressPollTimer) clearTimeout(smartProgressPollTimer);
+  api.getProgress().then(data => {
+    updateSmartProgress(data.progress);
+    if (!data.done) smartProgressPollTimer = setTimeout(pollSmartProgress, 500);
+    else loadSmartResults();
+  }).catch(e => {
+    console.error('Smart progress poll error:', e);
+    smartProgressPollTimer = setTimeout(pollSmartProgress, 1000);
+  });
+}
+
+function updateSmartProgress(p) {
+  els.smartProgressDesc.textContent = p.current || 'Сканирование…';
+  
+  const ring = els.smartProgressRingFill;
+  if (ring) {
+    const CIRC = 2 * Math.PI * 49;
+    ring.style.strokeDasharray = String(CIRC);
+    if (p.finished) { 
+      ring.style.strokeDashoffset = '0'; 
+      els.smartProgressPercent.textContent = '100'; 
+    }
+    else if (p.percent >= 0) {
+      const frac = clamp(p.percent, 0, 100) / 100;
+      ring.style.strokeDashoffset = String(CIRC * (1 - frac));
+      els.smartProgressPercent.textContent = String(Math.round(p.percent));
+    } else { 
+      ring.style.strokeDashoffset = String(CIRC); 
+      els.smartProgressPercent.textContent = '…'; 
+    }
+  }
+}
+
+async function loadSmartResults() {
+  try {
+    const res = await api.getSmartCategories();
+    state.smartScanCategories = res.categories;
+    state.smartTotalReclaimable = res.total_reclaimable;
+    state.smartSelectedCategories = new Set(res.categories.map(c => c.category));
+    state.findings = []; // Will be populated when user clicks "Review"
+    
+    // Update summary
+    els.smartSummaryTotal.textContent = formatNumber(res.total_files);
+    els.smartSummarySize.textContent = formatBytes(res.total_reclaimable);
+    
+    // Update donut chart text
+    els.donutReclaimable.textContent = formatBytes(res.total_reclaimable);
+    
+    // Render category cards
+    renderCategoryCards();
+    animateDonutChart();
+    
+    setPhase('smart-results');
+  } catch (e) {
+    showToast('Ошибка загрузки результатов: ' + e.message, 'error');
+    setPhase('smart-scan');
+  }
+}
+
+function renderCategoryCards() {
+  const container = els.categoryCards;
+  if (!container) return;
+  
+  const allowedCategories = SAFETY_CATEGORIES[state.smartSafetyLevel] || SAFETY_CATEGORIES.balanced;
+  
+  container.innerHTML = state.smartScanCategories.map((cat, i) => {
+    const isAllowed = allowedCategories.includes(cat.category);
+    const isSelected = state.smartSelectedCategories.has(cat.category);
+    const icon = CATEGORY_ICONS[cat.category] || '📄';
+    const description = CATEGORY_DESCRIPTIONS[cat.category] || cat.description;
+    const riskClass = cat.risk === 'safe' ? 'safe' : cat.risk === 'caution' ? 'caution' : 'protected';
+    
+    return `
+<div class="category-card${isSelected ? ' selected' : ''}" data-category="${escapeHtml(cat.category)}" style="animation-delay: ${50 + i * 30}ms; opacity: ${isAllowed ? '1' : '0.5'};">
+  <div class="category-card-header">
+    <div class="category-icon">${icon}</div>
+    <div class="category-info">
+      <div class="category-name">${escapeHtml(cat.category)}</div>
+      <div class="category-count">${formatNumber(cat.count)} файлов · ${formatBytes(cat.total_size)}</div>
+    </div>
+    <span class="category-risk ${riskClass}">${cat.risk === 'safe' ? 'Безопасно' : cat.risk === 'caution' ? 'Осторожно' : 'Защищено'}</span>
+  </div>
+  <div class="category-stats">
+    <span class="category-size">${formatBytes(cat.total_size)}</span>
+    <label class="category-checkbox">
+      <input type="checkbox" ${isSelected ? 'checked' : ''} ${!isAllowed ? 'disabled' : ''} onchange="toggleSmartCategory('${escapeHtml(cat.category)}', this.checked)">
+      <span>Выбрать</span>
+    </label>
+  </div>
+  <div class="category-paths">
+    ${cat.paths_sample.slice(0, 3).map(p => `<div class="category-path" title="${escapeHtml(p)}">${escapeHtml(p)}</div>`).join('')}
+    ${cat.count > 3 ? `<div class="category-path" style="color: var(--accent); cursor: pointer;" onclick="toggleCategoryExpand(this.closest('.category-card'))">… и ещё ${cat.count - 3} файлов</div>` : ''}
+  </div>
+  <button class="category-toggle" onclick="toggleCategoryExpand(this.closest('.category-card'))" aria-label="Развернуть">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+  </button>
+</div>
+`;
+  }).join('');
+  
+  // Apply stagger animation
+  staggerChildren(container, '.category-card', 50, 30);
+}
+
+function animateDonutChart() {
+  const prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (prefersReduced) {
+    // Set final values immediately
+    const usedSeg = document.getElementById('donut-used');
+    const reclaimSeg = document.getElementById('donut-reclaimable');
+    const totalSize = state.smartScanCategories.reduce((sum, c) => sum + c.total_size, 0);
+    const reclaimable = state.smartTotalReclaimable;
+    const used = totalSize - reclaimable;
+    const circumference = 2 * Math.PI * 80;
+    
+    if (usedSeg) usedSeg.style.strokeDashoffset = circumference * (1 - used / totalSize);
+    if (reclaimSeg) reclaimSeg.style.strokeDashoffset = circumference * (1 - reclaimable / totalSize);
+    return;
+  }
+  
+  // Animate
+  setTimeout(() => {
+    const usedSeg = document.getElementById('donut-used');
+    const reclaimSeg = document.getElementById('donut-reclaimable');
+    const totalSize = state.smartScanCategories.reduce((sum, c) => sum + c.total_size, 0);
+    const reclaimable = state.smartTotalReclaimable;
+    const used = totalSize - reclaimable;
+    const circumference = 2 * Math.PI * 80;
+    
+    if (usedSeg) usedSeg.style.strokeDashoffset = circumference * (1 - used / totalSize);
+    if (reclaimSeg) reclaimSeg.style.strokeDashoffset = circumference * (1 - reclaimable / totalSize);
+  }, 100);
+}
+
+function toggleSmartCategory(category, checked) {
+  if (checked) {
+    state.smartSelectedCategories.add(category);
+  } else {
+    state.smartSelectedCategories.delete(category);
+  }
+  // Update card visual
+  const card = document.querySelector(`.category-card[data-category="${category}"]`);
+  if (card) card.classList.toggle('selected', checked);
+  
+  // Update clean button state
+  const hasSelection = state.smartSelectedCategories.size > 0;
+  els.btnSmartCleanAll.disabled = !hasSelection;
+}
+
+function toggleCategoryExpand(card) {
+  if (!card) return;
+  card.classList.toggle('expanded');
+}
+
+function applySmartSafetyFilter() {
+  // Re-render cards with new safety level
+  renderCategoryCards();
+}
+
+async function executeSmartClean() {
+  if (state.smartSelectedCategories.size === 0) return;
+  
+  const categories = Array.from(state.smartSelectedCategories);
+  const mode = 'recycle'; // Default to recycle bin
+  
+  // Show confirmation modal
+  const totalSize = state.smartScanCategories
+    .filter(c => state.smartSelectedCategories.has(c.category))
+    .reduce((sum, c) => sum + c.total_size, 0);
+  
+  const count = state.smartScanCategories
+    .filter(c => state.smartSelectedCategories.has(c.category))
+    .reduce((sum, c) => sum + c.count, 0);
+  
+  els.modalTitle.innerHTML = `<svg class="modal-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg> Очистка в Корзину`;
+  els.modalText.innerHTML = `
+Удалить <strong>${formatNumber(count)}</strong> файлов 
+(<strong>${formatBytes(totalSize)}</strong>) в <strong>${categories.length}</strong> категориях?<br><br>
+Файлы можно будет восстановить из Корзины.
+  `;
+  els.modalConfirm.innerHTML = `<svg class="btn-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg> В Корзину`;
+  els.modalConfirm.className = 'btn btn-primary';
+  els.modal.classList.remove('hidden');
+  els.modalConfirm.focus();
+  
+  // Override executeDelete for smart clean
+  els.modalConfirm.onclick = async () => {
+    els.modal.classList.add('hidden');
+    state.pendingDeleteMode = null;
+    
+    try {
+      const res = await api.smartClean(categories, mode);
+      showToast(`Готово: удалено ${res.deleted}, ошибок ${res.failed}`, res.success ? 'success' : 'warning');
+      state.smartSelectedCategories.clear();
+      loadSmartResults(); // Refresh
+    } catch (e) {
+      showToast('Ошибка очистки: ' + e.message, 'error');
+    }
+  };
 }
 
 function applyFilters() {

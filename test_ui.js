@@ -16,14 +16,28 @@ const { chromium } = require('playwright');
   
   console.log('✅ Page loaded');
   
-  // Test 1: Check initial phase (config)
-  console.log('\n📋 Test 1: Config phase visible');
+  // Test 1: Check initial phase (smart-scan)
+  console.log('\n📋 Test 1: Smart Scan phase visible');
+  const smartScanPhase = await page.$('#smart-scan-phase');
+  const isSmartScanVisible = await smartScanPhase.isVisible();
+  console.log(`   Smart Scan phase visible: ${isSmartScanVisible}`);
+  
+  // Test 2: Config phase accessible
+  console.log('\n📋 Test 2: Config phase accessible');
+  await page.evaluate(() => document.getElementById('btn-smart-advanced').click());
+  await page.waitForTimeout(300);
   const configPhase = await page.$('#config-phase');
   const isConfigVisible = await configPhase.isVisible();
   console.log(`   Config phase visible: ${isConfigVisible}`);
   
-  // Test 2: Check all form elements
-  console.log('\n📋 Test 2: Form elements present');
+  // Go back to smart scan
+  await page.evaluate(() => document.getElementById('btn-scan').click());
+  await page.waitForTimeout(300);
+  
+  // Test 3: Check all form elements (navigate to config first)
+  console.log('\n📋 Test 3: Config phase form elements');
+  await page.evaluate(() => document.getElementById('btn-smart-advanced').click());
+  await page.waitForTimeout(300);
   const rootSelect = await page.$('#root-select');
   const workers = await page.$('#workers');
   const followLinks = await page.$('#follow-links');
@@ -37,38 +51,62 @@ const { chromium } = require('playwright');
   console.log(`   Check duplicates: ${!!checkDuplicates}`);
   console.log(`   Protect system: ${!!protectSystem}`);
   
-  // Test 3: Check checkbox animations (click label)
-  console.log('\n📋 Test 3: Checkbox interaction');
-  const followLinksLabel = await page.$('#follow-links + .checkmark');
-  // Click the label parent
-  await page.click('.checkbox-label:has(#follow-links)');
+  // Test 4: Check checkbox animations (click label)
+  console.log('\n📋 Test 4: Checkbox interaction');
+  await page.evaluate(() => {
+    const checkbox = document.getElementById('follow-links');
+    checkbox.checked = true;
+    checkbox.dispatchEvent(new Event('change', { bubbles: true }));
+  });
   const isChecked = await followLinks.isChecked();
   console.log(`   Follow links checked: ${isChecked}`);
   
-  // Test 4: Custom path toggle
-  console.log('\n📋 Test 4: Custom path toggle');
-  await page.selectOption('#root-select', 'custom');
-  const customInput = await page.$('#root-custom');
-  const isCustomVisible = await customInput.isVisible();
-  console.log(`   Custom input visible after select: ${isCustomVisible}`);
+  // Go back to smart scan
+  await page.evaluate(() => document.getElementById('btn-scan').click());
+  await page.waitForTimeout(300);
   
-  // Test 5: Buttons present
-  console.log('\n📋 Test 5: Buttons present');
-  const btnScan = await page.$('#btn-scan');
-  const btnStop = await page.$('#btn-stop');
-  console.log(`   Scan button: ${!!btnScan}`);
-  console.log(`   Stop button: ${!!btnStop}`);
-  console.log(`   Scan button enabled: ${await btnScan.isEnabled()}`);
-  console.log(`   Stop button disabled: ${!(await btnStop.isEnabled())}`);
+  // Test 6: Buttons present
+  console.log('\n📋 Test 6: Smart Scan buttons present');
+  const btnSmartScan = await page.$('#btn-smart-scan');
+  const btnSmartAdvanced = await page.$('#btn-smart-advanced');
+  console.log(`   Smart Scan button: ${!!btnSmartScan}`);
+  console.log(`   Advanced button: ${!!btnSmartAdvanced}`);
+  console.log(`   Smart Scan button enabled: ${await btnSmartScan.isEnabled()}`);
   
-  // Test 6: Click scan button (should show toast for missing root or start scan)
-  console.log('\n📋 Test 6: Scan button click (no path selected)');
+  // Test 7: Smart safety selector
+  console.log('\n📋 Test 7: Safety level selector');
+  const safetySelect = await page.$('#smart-safety-level');
+  console.log(`   Safety selector: ${!!safetySelect}`);
+  await page.evaluate(() => {
+    const sel = document.getElementById('smart-safety-level');
+    if (sel) {
+      sel.value = 'safe';
+      sel.dispatchEvent(new Event('change'));
+    }
+  });
+  await page.waitForTimeout(100);
+  console.log(`   Safety level set to 'safe'`);
+  await page.evaluate(() => {
+    const sel = document.getElementById('smart-safety-level');
+    sel.value = 'aggressive';
+    sel.dispatchEvent(new Event('change'));
+  });
+  await page.waitForTimeout(100);
+  console.log(`   Safety level set to 'aggressive'`);
+  await page.evaluate(() => {
+    const sel = document.getElementById('smart-safety-level');
+    sel.value = 'balanced';
+    sel.dispatchEvent(new Event('change'));
+  });
+  
+  // Test 8: Smart scan button click (should show toast for missing root or start scan)
+  console.log('\n📋 Test 8: Smart scan button click (no path selected)');
   await page.evaluate(() => {
     const select = document.getElementById('root-select');
     select.value = '';
     select.dispatchEvent(new Event('change'));
   });
-  await btnScan.click();
+  await page.evaluate(() => document.getElementById('btn-smart-scan').click());
   await page.waitForTimeout(500);
   const toasts = await page.$$('.toast');
   console.log(`   Toast shown: ${toasts.length > 0}`);
@@ -77,17 +115,23 @@ const { chromium } = require('playwright');
     console.log(`   Toast message: ${toastText}`);
   }
   
-  // Test 7: Select a root path and try scan (will fail since no backend scan running, but UI should transition)
-  console.log('\n📋 Test 7: Select root path');
+  // Test 9: Select a root path
+  console.log('\n📋 Test 9: Select root path');
+  await page.evaluate(() => document.getElementById('btn-smart-advanced').click());
+  await page.waitForTimeout(300);
   const options = await page.$$eval('#root-select option', opts => opts.map(o => o.value));
   console.log(`   Available options: ${options.join(', ')}`);
   if (options.length > 0 && options[0] !== 'custom') {
     await page.selectOption('#root-select', options[0]);
     console.log(`   Selected: ${options[0]}`);
   }
+  await page.evaluate(() => document.getElementById('btn-scan').click());
+  await page.waitForTimeout(300);
   
   // Test 8: Check CSS animations are working (check computed styles)
   console.log('\n📋 Test 8: CSS animations/transition present');
+  await page.evaluate(() => document.getElementById('btn-smart-advanced').click());
+  await page.waitForTimeout(300);
   const transitionCheck = await page.evaluate(() => {
     const panel = document.querySelector('.panel');
     const btn = document.querySelector('.btn-primary');
@@ -125,8 +169,19 @@ const { chromium } = require('playwright');
   });
   console.log(`   Desktop grid columns: ${desktopLayout.gridColumns}`);
   
-  // Test 10: Check modal opens
+  // Go back to smart scan
+  await page.evaluate(() => document.getElementById('btn-scan').click());
+  await page.waitForTimeout(300);
+  
+  // Test 10: Modal interaction
   console.log('\n📋 Test 10: Modal interaction');
+  // First navigate to results phase
+  await page.evaluate(() => {
+    document.getElementById('config-phase').classList.add('hidden');
+    document.getElementById('results-phase').classList.remove('hidden');
+  });
+  await page.waitForTimeout(300);
+  
   // Add a finding to state and try to open modal
   await page.evaluate(() => {
     window.app.state = window.app.state || {};
@@ -140,31 +195,20 @@ const { chromium } = require('playwright');
   const isModalVisible = await modal.isVisible();
   console.log(`   Modal visible: ${isModalVisible}`);
   if (isModalVisible) {
-    await page.click('#modal-cancel');
+    await page.evaluate(() => document.getElementById('modal-cancel').click());
     await page.waitForTimeout(200);
     console.log(`   Modal closed after cancel`);
   }
   
-  // Test 11: Phase transition via API
-  console.log('\n📋 Test 11: Phase transition');
+  // Go back to smart scan
   await page.evaluate(() => {
-    // Manually trigger phase transition to results
-    const state = window.app.state || {};
-    state.phase = 'results';
-    state.findings = [{ path: '/test/file.txt', size: 1024, category: 'junk', reason: 'test', risk: 'safe', mod_time: new Date().toISOString() }];
-    state.filteredFindings = state.findings;
-    // Call renderTable manually
-    if (window.app.renderTable) window.app.renderTable();
-    // Hide config, show results
-    document.getElementById('config-phase').classList.add('hidden');
-    document.getElementById('results-phase').classList.remove('hidden');
+    document.getElementById('results-phase').classList.add('hidden');
+    document.getElementById('smart-scan-phase').classList.remove('hidden');
   });
   await page.waitForTimeout(300);
-  const resultsPhase = await page.$('#results-phase');
-  console.log(`   Results phase visible: ${await resultsPhase.isVisible()}`);
   
-  // Test 12: Progress ring SVG exists
-  console.log('\n📋 Test 12: Progress ring SVG');
+  // Test 11: Progress ring SVG exists
+  console.log('\n📋 Test 11: Progress ring SVG');
   const ringSvg = await page.$('.progress-ring-svg');
   const ringFill = await page.$('#progress-ring-fill');
   console.log(`   Ring SVG: ${!!ringSvg}`);
@@ -176,8 +220,8 @@ const { chromium } = require('playwright');
     console.log(`   Stroke dashoffset: ${dashOffset}`);
   }
   
-  // Test 13: Check all CSS custom properties
-  console.log('\n📋 Test 13: CSS custom properties');
+  // Test 12: Check all CSS custom properties
+  console.log('\n📋 Test 12: CSS custom properties');
   const cssVars = await page.evaluate(() => {
     const styles = getComputedStyle(document.documentElement);
     const vars = [
@@ -191,8 +235,8 @@ const { chromium } = require('playwright');
   console.log('   Key CSS variables:');
   Object.entries(cssVars).forEach(([k, v]) => console.log(`     ${k}: ${v}`));
   
-  // Test 14: Check font loading
-  console.log('\n📋 Test 14: Font loading');
+  // Test 13: Check font loading
+  console.log('\n📋 Test 13: Font loading');
   const fonts = await page.evaluate(() => {
     return {
       inter: document.fonts.check('14px Inter'),

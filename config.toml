@@ -1,6 +1,6 @@
 root = "/Users/eldar"
 workers = 4
-follow_links = false
+follow_links = true
 exclude_dirs = [
     ".Trash",
     "Library",

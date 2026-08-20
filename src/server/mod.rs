@@ -198,7 +198,48 @@ mod api {
     }
 }
 
+/// Smart Scan API types
+mod smart_api {
+    use serde::{Deserialize, Serialize};
+    use super::*;
+
+    #[derive(Serialize)]
+    pub struct SmartCategorySummary {
+        pub category: Category,
+        pub count: usize,
+        pub total_size: u64,
+        pub risk: crate::rules::Risk,
+        pub description: String,
+        pub paths_sample: Vec<String>,
+    }
+
+    #[derive(Serialize)]
+    pub struct SmartScanResponse {
+        pub scan_id: u64,
+        pub status: String,
+        pub categories: Vec<SmartCategorySummary>,
+        pub total_reclaimable: u64,
+        pub total_files: usize,
+    }
+
+    #[derive(Deserialize)]
+    pub struct SmartCleanRequest {
+        pub categories: Vec<String>,  // Category names to clean
+        pub mode: String,             // "recycle" or "hard"
+    }
+
+    #[derive(Serialize)]
+    pub struct SmartCleanResponse {
+        pub deleted: usize,
+        pub failed: usize,
+        pub total_bytes: u64,
+        pub errors: Vec<crate::cleaner::DeleteError>,
+        pub success: bool,
+    }
+}
+
 use api::*;
+use smart_api::*;
 
 /// Create the router with all routes
 pub fn create_router(state: ServerState) -> Router {
@@ -210,6 +251,10 @@ pub fn create_router(state: ServerState) -> Router {
         .route("/api/delete", post(handle_delete))
         .route("/api/config", get(handle_get_config).put(handle_put_config))
         .route("/api/export", get(handle_export))
+        // Smart Scan endpoints
+        .route("/api/smart-scan", post(handle_smart_scan))
+        .route("/api/smart-categories", get(handle_smart_categories))
+        .route("/api/smart-clean", post(handle_smart_clean))
         .fallback(handle_static)
         .layer(tower_http::cors::CorsLayer::permissive())
         .with_state(state)
@@ -572,4 +617,303 @@ fn escape_csv(s: &str) -> String {
 fn format_time(t: std::time::SystemTime) -> String {
     let datetime: chrono::DateTime<chrono::Utc> = t.into();
     datetime.to_rfc3339()
+}
+
+// ========== Smart Scan Handlers ==========
+
+async fn handle_smart_scan(
+    State(state): State<ServerState>,
+) -> impl IntoResponse {
+    let mut cfg = state.config.lock().unwrap().clone();
+    
+    // Enable all smart junk categories for smart scan
+    cfg.smart_junk_enabled = true;
+    cfg.scan_user_caches = true;
+    cfg.scan_system_logs = true;
+    cfg.scan_language_files = true;
+    cfg.scan_old_backups = true;
+    cfg.scan_mail_attachments = true;
+    cfg.scan_trash = true;
+    cfg.scan_old_downloads = true;
+    cfg.scan_unused_disk_images = true;
+    cfg.scan_dev_caches = true;
+    cfg.scan_ide_caches = true;
+    cfg.scan_large_hidden = true;
+    cfg.check_duplicates = true;
+
+    // Reset state
+    let scan_id = {
+        let mut scan_id = state.scan_id.lock().unwrap();
+        *scan_id += 1;
+        *scan_id
+    };
+    
+    *state.scanner.lock().unwrap() = None;
+    *state.findings.lock().unwrap() = Vec::new();
+    *state.records.lock().unwrap() = Vec::new();
+    *state.errors.lock().unwrap() = Vec::new();
+    *state.scan_done.lock().unwrap() = false;
+    *state.cancel_flag.lock().unwrap() = false;
+    
+    let progress = Progress::new();
+    *state.progress.lock().unwrap() = Some(progress.clone());
+
+    let opts = Options {
+        workers: cfg.workers,
+        follow_links: cfg.follow_links,
+        exclude: cfg.exclude_dirs.clone(),
+        exclude_pref: cfg.exclude_prefix.clone(),
+    };
+
+    let cache: Option<Arc<dyn Cache>> = if cfg.use_cache {
+        let hash = cache_config_hash(&opts);
+        BoltCache::new("unused-removal", &hash).ok().map(|c| Arc::new(c) as Arc<dyn Cache>)
+    } else { None };
+
+    let scanner = Scanner::new(opts, progress, cache);
+    *state.scanner.lock().unwrap() = Some(scanner.clone());
+    
+    let root = cfg.root.clone();
+    let state_clone = state.clone();
+    let cfg_clone = cfg.clone();
+    
+    tokio::spawn(async move {
+        let root_for_walk = root.clone();
+        let recs_result = tokio::task::spawn_blocking(move || scanner.walk(&root_for_walk)).await;
+        
+        let (recs, errs) = match recs_result {
+            Ok(Ok((r, e))) => (r, e),
+            Ok(Err(e)) => {
+                error!("Scan error: {}", e);
+                (Vec::new(), vec![ScanError { path: root.clone(), error: e.to_string() }])
+            }
+            Err(e) => {
+                error!("Scan task panicked: {}", e);
+                (Vec::new(), vec![ScanError { path: root, error: "Scan panicked".to_string() }])
+            }
+        };
+
+        let engine = Engine::new(Arc::new(cfg_clone.clone()));
+        let mut findings = engine.analyze(&recs);
+        
+        if cfg_clone.check_duplicates {
+            let dups = engine.find_duplicates(&recs);
+            findings.extend(dups);
+        }
+        
+        findings.sort_by(|a, b| b.size.cmp(&a.size));
+        
+        // Filter by safety level
+        findings = filter_findings_by_safety(findings, &cfg_clone);
+        
+        if let Some(p) = state_clone.progress.lock().unwrap().as_ref() {
+            p.finish();
+        }
+        *state_clone.records.lock().unwrap() = recs;
+        *state_clone.errors.lock().unwrap() = errs;
+        *state_clone.findings.lock().unwrap() = findings;
+        *state_clone.scan_done.lock().unwrap() = true;
+    });
+    
+    Json(serde_json::json!({ "scan_id": scan_id, "status": "started" }))
+}
+
+async fn handle_smart_categories(
+    State(state): State<ServerState>,
+) -> impl IntoResponse {
+    let findings = state.findings.lock().unwrap().clone();
+    
+    if findings.is_empty() {
+        return Json(SmartScanResponse {
+            scan_id: 0,
+            status: "no_scan".to_string(),
+            categories: Vec::new(),
+            total_reclaimable: 0,
+            total_files: 0,
+        }).into_response();
+    }
+    
+    let categories = build_category_summaries(&findings);
+    let total_reclaimable: u64 = categories.iter().map(|c| c.total_size).sum();
+    let total_files: usize = categories.iter().map(|c| c.count).sum();
+    
+    Json(SmartScanResponse {
+        scan_id: *state.scan_id.lock().unwrap(),
+        status: "completed".to_string(),
+        categories,
+        total_reclaimable,
+        total_files,
+    }).into_response()
+}
+
+async fn handle_smart_clean(
+    State(state): State<ServerState>,
+    Json(req): Json<SmartCleanRequest>,
+) -> Response {
+    if req.categories.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": "no categories provided" }))).into_response();
+    }
+    
+    let findings = state.findings.lock().unwrap().clone();
+    
+    // Filter findings by requested categories
+    let category_set: std::collections::HashSet<String> = req.categories.into_iter().collect();
+    let paths_to_delete: Vec<String> = findings.iter()
+        .filter(|f| category_set.contains(&f.category.to_string()))
+        .map(|f| f.path.clone())
+        .collect();
+    
+    if paths_to_delete.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": "no matching files found" }))).into_response();
+    }
+    
+    let result: Result<DeleteResult, anyhow::Error> = if req.mode == "hard" {
+        hard_delete(&paths_to_delete)
+    } else {
+        recycle_bin(&paths_to_delete)
+    };
+    
+    match result {
+        Ok(res) => {
+            let deleted_set: std::collections::HashSet<_> = res.deleted.iter().cloned().collect();
+            state.findings.lock().unwrap().retain(|f| !deleted_set.contains(&f.path));
+            
+            let failed_count = res.failed.len();
+            Json(SmartCleanResponse {
+                deleted: res.deleted.len(),
+                failed: failed_count,
+                total_bytes: res.total_bytes,
+                errors: res.failed,
+                success: failed_count == 0,
+            }).into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() }))
+        ).into_response()
+    }
+}
+
+/// Filter findings based on safety level
+fn filter_findings_by_safety(findings: Vec<Finding>, config: &Config) -> Vec<Finding> {
+    use crate::config::SafetyLevel;
+    use crate::rules::Category;
+
+    let safety = config.smart_junk_safety_level;
+
+    let allowed_categories: Vec<Category> = match safety {
+        SafetyLevel::Safe => vec![
+            Category::Junk,
+            Category::UserCache,
+            Category::SystemLog,
+            Category::Trash,
+            Category::OldDownload,
+            Category::DevCache,
+            Category::XcodeCache,
+            Category::VSCodeCache,
+            Category::OldLog,
+            Category::StaleInstall,
+        ],
+        SafetyLevel::Balanced => vec![
+            Category::Junk,
+            Category::UserCache,
+            Category::SystemLog,
+            Category::Trash,
+            Category::OldDownload,
+            Category::DevCache,
+            Category::XcodeCache,
+            Category::VSCodeCache,
+            Category::OldLog,
+            Category::StaleInstall,
+            Category::LanguageFile,
+            Category::OldBackup,
+            Category::MailAttachment,
+        ],
+        SafetyLevel::Aggressive => vec![
+            Category::Junk,
+            Category::UserCache,
+            Category::SystemLog,
+            Category::Trash,
+            Category::OldDownload,
+            Category::DevCache,
+            Category::XcodeCache,
+            Category::VSCodeCache,
+            Category::OldLog,
+            Category::StaleInstall,
+            Category::LanguageFile,
+            Category::OldBackup,
+            Category::MailAttachment,
+            Category::UnusedDiskImage,
+            Category::LargeHidden,
+            Category::Stale,
+            Category::Duplicate,
+            Category::AppLeftovers,
+            Category::Huge,
+            Category::Large,
+        ],
+    };
+
+    findings.into_iter()
+        .filter(|f| allowed_categories.contains(&f.category))
+        .collect()
+}
+
+/// Build category summaries for smart scan response
+fn build_category_summaries(findings: &[Finding]) -> Vec<SmartCategorySummary> {
+    use std::collections::HashMap;
+    use crate::rules::Category;
+
+    let mut by_cat: HashMap<Category, Vec<&Finding>> = HashMap::new();
+    for f in findings {
+        by_cat.entry(f.category).or_default().push(f);
+    }
+
+    let mut summaries = Vec::new();
+    
+    for (category, items) in by_cat {
+        let count = items.len();
+        let total_size: u64 = items.iter().map(|f| f.size as u64).sum();
+        let risk = items.first().map(|f| f.risk).unwrap_or(crate::rules::Risk::Safe);
+        let description = get_category_description(category);
+        let paths_sample = items.iter().take(5).map(|f| f.path.clone()).collect();
+        
+        summaries.push(SmartCategorySummary {
+            category,
+            count,
+            total_size,
+            risk,
+            description,
+            paths_sample,
+        });
+    }
+    
+    // Sort by total size descending
+    summaries.sort_by(|a, b| b.total_size.cmp(&a.total_size));
+    summaries
+}
+
+fn get_category_description(category: crate::rules::Category) -> String {
+    use crate::rules::Category;
+    match category {
+        Category::UserCache => "Browser and application caches".to_string(),
+        Category::SystemLog => "Old system and application logs".to_string(),
+        Category::DevCache => "Development tool caches (npm, cargo, pip, gradle, etc.)".to_string(),
+        Category::XcodeCache => "Xcode derived data, archives, device support".to_string(),
+        Category::VSCodeCache => "VS Code / Cursor cached data and logs".to_string(),
+        Category::Trash => "Files in Recycle Bin / Trash".to_string(),
+        Category::OldDownload => "Old files in Downloads folder".to_string(),
+        Category::Junk => "Temporary and junk files by extension/location".to_string(),
+        Category::OldLog => "Old log files".to_string(),
+        Category::StaleInstall => "Old installers in Downloads".to_string(),
+        Category::LanguageFile => "Unused language/localization files".to_string(),
+        Category::OldBackup => "Old iOS/Time Machine/Windows backups".to_string(),
+        Category::MailAttachment => "Old mail attachments".to_string(),
+        Category::UnusedDiskImage => "Unused disk images (.dmg, .iso, etc.)".to_string(),
+        Category::LargeHidden => "Large hidden files".to_string(),
+        Category::Stale => "Files not modified for a long time".to_string(),
+        Category::Duplicate => "Duplicate files (same content)".to_string(),
+        Category::AppLeftovers => "Possible leftover files from uninstalled apps".to_string(),
+        Category::Huge => "Very large files".to_string(),
+        Category::Large => "Large files".to_string(),
+    }
 }
