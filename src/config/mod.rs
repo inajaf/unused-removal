@@ -90,7 +90,6 @@ impl Config {
                 workers: 0,
                 follow_links: false,
                 exclude_dirs: vec![
-                    r"$Recycle.Bin".to_string(),
                     r"System Volume Information".to_string(),
                     r"Windows\WinSxS".to_string(),
                     r"Windows\SoftwareDistribution".to_string(),
@@ -111,13 +110,12 @@ impl Config {
                     ".chk".to_string(),
                     "~$*".to_string(),
                 ],
+                // NOTE: browser cache dirs are handled by dedicated UserCache
+                // rules with higher precision — do not swallow them into Junk.
                 junk_dirs: vec![
                     "%TEMP%".to_string(),
                     r"C:\Windows\Temp".to_string(),
                     r"C:\Windows\Prefetch".to_string(),
-                    r"%LOCALAPPDATA%\Google\Chrome\User Data\Default\Cache".to_string(),
-                    r"%LOCALAPPDATA%\Microsoft\Edge\User Data\Default\Cache".to_string(),
-                    r"%LOCALAPPDATA%\Mozilla\Firefox\Profiles".to_string(),
                 ],
                 check_duplicates: false,
                 // Smart Junk
@@ -157,7 +155,6 @@ impl Config {
                 workers: 0,
                 follow_links: false,
                 exclude_dirs: vec![
-                    ".Trash".to_string(),
                     "/System".to_string(),
                     "/Library".to_string(),
                     "/private".to_string(),
@@ -179,13 +176,12 @@ impl Config {
                     ".chk".to_string(),
                     ".DS_Store".to_string(),
                 ],
+                // NOTE: ~/Library/{Caches,Logs} are classified by the dedicated
+                // UserCache/SystemLog rules — do not duplicate them as Junk dirs.
                 junk_dirs: vec![
-                    "$TMPDIR".to_string(),
                     "/tmp".to_string(),
                     "/private/tmp".to_string(),
                     "/var/folders".to_string(),
-                    "$HOME/Library/Caches".to_string(),
-                    "$HOME/Library/Logs".to_string(),
                 ],
                 check_duplicates: false,
                 // Smart Junk

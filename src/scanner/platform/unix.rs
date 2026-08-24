@@ -54,8 +54,11 @@ impl UnixWalker {
         }
 
         // --- Phase 1: parallel traversal (jwalk), collect (parent_dir, file_path) pairs ---
+        // skip_hidden(false): dot-directories like ~/.Trash must be scanned —
+        // they are exactly where cleanable junk (trash, caches) lives.
         let pairs: Vec<(String, String)> = jwalk::WalkDir::new(&root_str)
             .follow_links(self.opts.follow_links)
+            .skip_hidden(false)
             .into_iter()
             .filter_map(|entry| entry.ok())
             .take_while(|entry| !self.stopped.load(Ordering::Relaxed))

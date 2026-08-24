@@ -23,9 +23,9 @@ function check(name, cond, extra = '') {
   // ============ 1. SMART SCAN PHASE ============
   console.log('\n📋 [1] SMART SCAN PHASE');
   check('Smart scan phase visible', await page.isVisible('#smart-scan-phase'));
-  check('btn-smart-scan visible', await page.isVisible('#btn-smart-scan'));
-  check('btn-smart-advanced visible', await page.isVisible('#btn-smart-advanced'));
-  check('safety selector visible', await page.isVisible('#smart-safety-level'));
+  check('safety cards visible (3)', (await page.$$('.safety-card')).length === 3);
+  check('settings button visible', await page.isVisible('#btn-open-settings'));
+  check('hidden safety select present', await page.$eval('#smart-safety-level', el => !!el));
   check('Hero icon visible', await page.isVisible('.smart-scan-icon'));
   check('Hero title visible', await page.isVisible('.smart-scan-hero h3'));
   check('Hero subtitle visible', await page.isVisible('.smart-scan-subtitle'));
@@ -40,7 +40,7 @@ function check(name, cond, extra = '') {
 
   // ============ 2. NAVIGATION ============
   console.log('\n📋 [2] NAVIGATION');
-  await page.click('#btn-smart-advanced');
+  await page.click('#btn-open-settings');
   await page.waitForTimeout(400);
   check('Config phase after "Расширенные настройки"', await page.isVisible('#config-phase'));
   await page.click('#btn-back-to-smart');
@@ -49,7 +49,7 @@ function check(name, cond, extra = '') {
 
   // ============ 3. CONFIG PHASE ============
   console.log('\n📋 [3] CONFIG PHASE');
-  await page.click('#btn-smart-advanced');
+  await page.click('#btn-open-settings');
   await page.waitForTimeout(400);
 
   // Root select options
@@ -162,19 +162,19 @@ function check(name, cond, extra = '') {
   await page.waitForTimeout(300);
   const mobile = await page.evaluate(() => {
     const grid = document.querySelector('.form-grid');
-    const hero = document.querySelector('.smart-scan-actions');
-    const actionsW = hero.getBoundingClientRect().width;
-    const btnW = document.getElementById('btn-smart-scan').getBoundingClientRect().width;
+    const cards = document.querySelector('.safety-cards');
+    const actionsW = cards.getBoundingClientRect().width;
+    const btnW = document.querySelector('.safety-card').getBoundingClientRect().width;
     return {
       gridCols: getComputedStyle(grid).gridTemplateColumns,
-      heroFlexDir: getComputedStyle(hero).flexDirection,
+      heroFlexDir: getComputedStyle(cards).gridTemplateColumns.split(' ').length === 1 ? 'column' : 'row',
       scanBtnWidth: Math.round(btnW),
       actionsWidth: Math.round(actionsW)
     };
   });
   check('Mobile: form grid single column', mobile.gridCols.split(' ').length <= 1 || mobile.gridCols.includes('px'));
-  check('Mobile: hero actions column', mobile.heroFlexDir === 'column');
-  check(`Mobile: scan button spans container (${mobile.scanBtnWidth}/${mobile.actionsWidth}px)`, mobile.actionsWidth > 0 && mobile.scanBtnWidth >= mobile.actionsWidth - 2);
+  check('Mobile: safety cards stack in column', mobile.heroFlexDir === 'column');
+  check(`Mobile: safety card spans container (${mobile.scanBtnWidth}/${mobile.actionsWidth}px)`, mobile.actionsWidth > 0 && mobile.scanBtnWidth >= mobile.actionsWidth - 2);
 
   await page.setViewportSize({ width: 1400, height: 900 });
   await page.waitForTimeout(400);
@@ -201,10 +201,10 @@ function check(name, cond, extra = '') {
   });
   check('Set root to 10k fixture via API', setRoot);
 
-  await page.click('#btn-smart-scan');
+  await page.click('.safety-card[data-level="balanced"]');
   await page.waitForTimeout(500);
   check('Progress shown', await page.isVisible('#smart-scan-progress'));
-  check('Scan button disabled', await page.$eval('#btn-smart-scan', el => el.disabled));
+  check('Stop button shown during scan', await page.isVisible('#btn-smart-stop'));
   check('Progress ring has scanning class', await page.$eval('#smart-scan-progress .progress-ring', el => el.classList.contains('scanning')));
 
   // Wait for completion (up to 40s for 10k files)
@@ -266,12 +266,9 @@ function check(name, cond, extra = '') {
   await page.waitForTimeout(200);
   check('Clean-all button enabled after selection', !(await page.$eval('#btn-smart-clean-all', el => el.disabled)));
 
-  // Safety re-filter
-  for (const level of ['safe', 'balanced', 'aggressive']) {
-    await page.selectOption('#smart-results-safety', level);
-    await page.waitForTimeout(400);
-    check(`Results safety → ${level} re-renders`, (await page.$$eval('.category-card', els => els.length)) >= 0);
-  }
+  // Level chip present and valid
+  const lvlTe = await page.$eval('#results-level-label', el => el.textContent);
+  check(`Level chip shows "${lvlTe}"`, ['Безопасный','Сбалансированный','Агрессивный'].includes(lvlTe));
 
   // ============ 8. RESULTS TABLE (10k) ============
   console.log('\n📋 [8] RESULTS TABLE');

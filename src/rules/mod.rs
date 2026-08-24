@@ -618,7 +618,6 @@ impl Engine {
                 "/library/caches/com.apple.",
                 "/private/var/folders/",
                 "/var/folders/",
-                "/users/*/library/caches/",
             ];
             for dir in MACOS_CACHE_DIRS {
                 if lower_path.contains(dir) {

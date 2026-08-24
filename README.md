@@ -28,6 +28,31 @@ cargo build --release
 
 ## Usage
 
+### Desktop app (native window)
+
+The same web UI wrapped in a native OS window (tao + wry). Built additively via the
+`desktop` cargo feature — the plain binary and all existing commands are unaffected.
+
+```bash
+# Run from source
+cargo run --release --features desktop -- app
+
+# macOS: .app bundle (+ optional .dmg with --dmg)
+./scripts/build-desktop-macos.sh [--dmg]
+
+# Linux: tar.gz launcher (+ AppImage if appimagetool is installed)
+#   system deps: libwebkit2gtk-4.1-dev
+./scripts/build-desktop-linux.sh
+
+# Windows: single portable .exe (+ optional Inno Setup installer)
+.\scripts\build-desktop-windows.ps1 [-Installer]
+```
+
+The app assigns a free ephemeral port automatically, so multiple instances never
+conflict. `--port` overrides it if needed.
+
+### Web UI (recommended)
+
 ### Web UI (recommended)
 
 ```bash

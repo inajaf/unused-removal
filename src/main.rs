@@ -9,6 +9,7 @@ mod cleaner;
 mod server;
 mod cli;
 mod tui;
+mod desktop;
 
 // Re-export scanner types for public API
 pub use scanner_types::{
@@ -75,6 +76,13 @@ enum Commands {
     /// Start web interface
     Serve {
         /// Port to listen on (0 = auto)
+        #[arg(short, long)]
+        port: Option<u16>,
+    },
+    /// Launch as a desktop application (native window; requires the `desktop` feature)
+    #[cfg(feature = "desktop")]
+    App {
+        /// Port for the embedded UI server
         #[arg(short, long)]
         port: Option<u16>,
     },
@@ -152,6 +160,10 @@ fn main() -> Result<()> {
                 .enable_all()
                 .build()?;
             rt.block_on(run_server(cfg))?;
+        }
+        #[cfg(feature = "desktop")]
+        Some(Commands::App { port }) => {
+            desktop::run_app(config, port)?;
         }
         Some(Commands::Tui) => {
             tui::run(config)?;

@@ -260,25 +260,48 @@ pub fn create_router(state: ServerState) -> Router {
         .with_state(state)
 }
 
-/// Start the HTTP server
+/// Start the HTTP server and open the user's default browser
 pub async fn run_server(config: Config) -> anyhow::Result<()> {
-    let state = ServerState::new(config);
-    let port = state.config.lock().unwrap().web_port;
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
-    
-    let app = create_router(state.clone());
-    
-    info!("Starting web server on http://{}", addr);
-    
-    let url = format!("http://{}", addr);
+    let url = format!("http://127.0.0.1:{}", config.web_port);
     tokio::spawn(async move {
         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
         let _ = open::that(&url);
     });
 
+    run_server_headless(config).await
+}
+
+/// Start the HTTP server without opening a browser (used by the desktop shell)
+pub async fn run_server_headless(config: Config) -> anyhow::Result<()> {
+    run_server_ready(config, |_| {}).await
+}
+
+/// Bind the server (resolving an ephemeral port when `web_port == 0`),
+/// report the actually bound port via `on_ready`, then serve until shutdown.
+pub async fn run_server_ready<F>(config: Config, on_ready: F) -> anyhow::Result<()>
+where
+    F: FnOnce(u16),
+{
+    let mut state = ServerState::new(config);
+    let requested = state.config.lock().unwrap().web_port;
+    let addr = SocketAddr::from(([127, 0, 0, 1], requested));
+
     let listener = tokio::net::TcpListener::bind(addr).await?;
+    let actual = listener.local_addr()?.port();
+
+    {
+        let mut c = state.config.lock().unwrap();
+        c.web_port = actual;
+    }
+
+    let app = create_router(state.clone());
+
+    info!("Starting web server on http://127.0.0.1:{}", actual);
+
+    on_ready(actual);
+
     axum::serve(listener, app).with_graceful_shutdown(shutdown_signal()).await?;
-    
+
     Ok(())
 }
 
@@ -647,7 +670,9 @@ async fn handle_smart_scan(
     cfg.scan_dev_caches = true;
     cfg.scan_ide_caches = true;
     cfg.scan_large_hidden = true;
-    cfg.check_duplicates = true;
+    // NOTE: duplicate hashing is expensive and only surfaces in the
+    // `aggressive` safety level — respect the caller's config instead of
+    // forcing it on (a balanced scan of a large home dir must stay fast).
 
     // Increment scan id
     let scan_id = {
@@ -692,20 +717,37 @@ async fn handle_smart_scan(
     let root = cfg.root.clone();
     let state_clone = state.clone();
     let cfg_clone = cfg.clone();
-    
+
     tokio::spawn(async move {
-        let root_for_walk = root.clone();
-        let recs_result = tokio::task::spawn_blocking(move || scanner.walk(&root_for_walk)).await;
-        
-        let (recs, errs) = match recs_result {
-            Ok(Ok((r, e))) => (r, e),
-            Ok(Err(e)) => {
-                error!("Scan error: {}", e);
-                (Vec::new(), vec![ScanError { path: root.clone(), error: e.to_string() }])
+        // Smart scan walks known junk zones (fast mode) for safe/balanced
+        // levels, or the full tree for aggressive / narrow custom targets.
+        let walk_roots = smart_scan_roots(&root, &cfg_clone.smart_junk_safety_level);
+        info!("Smart scan targets ({}): {:?}", walk_roots.len(), walk_roots);
+
+        let recs_result = tokio::task::spawn_blocking(move || {
+            let mut all_recs: Vec<FileRecord> = Vec::new();
+            let mut all_errs: Vec<ScanError> = Vec::new();
+            for r in &walk_roots {
+                if scanner.is_stopped() { break; }
+                match scanner.walk(r) {
+                    Ok((mut recs, errs)) => {
+                        all_recs.append(&mut recs);
+                        all_errs.extend(errs);
+                    }
+                    Err(e) => {
+                        error!("Scan error on {}: {}", r, e);
+                        all_errs.push(ScanError { path: r.clone(), error: e.to_string() });
+                    }
+                }
             }
+            (all_recs, all_errs)
+        }).await;
+
+        let (recs, errs) = match recs_result {
+            Ok((r, e)) => (r, e),
             Err(e) => {
                 error!("Scan task panicked: {}", e);
-                (Vec::new(), vec![ScanError { path: root, error: "Scan panicked".to_string() }])
+                (Vec::new(), vec![ScanError { path: root.clone(), error: "Scan panicked".to_string() }])
             }
         };
 
@@ -807,6 +849,66 @@ async fn handle_smart_clean(
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": e.to_string() }))
         ).into_response()
+    }
+}
+
+/// Known junk zones for the fast smart-scan mode.
+///
+/// Safe/Balanced levels scan only these well-known sources (that is what
+/// makes cleanup finish in seconds); Aggressive walks the full tree because
+/// stale/huge/duplicate detection needs complete coverage. A narrow custom
+/// target without standard zones falls back to a full walk of itself.
+fn smart_scan_roots(root: &str, safety: &crate::config::SafetyLevel) -> Vec<String> {
+    use crate::config::SafetyLevel as SL;
+
+    if *safety == SL::Aggressive {
+        return vec![root.to_string()];
+    }
+
+    let root_norm = root.trim_end_matches(['/', '\\']).to_string();
+    let mut zones: Vec<String> = Vec::new();
+    let mut push = |p: String| if !zones.contains(&p) { zones.push(p); };
+
+    #[cfg(target_os = "macos")]
+    {
+        for rel in ["Downloads", "Library/Caches", "Library/Logs", ".Trash"] {
+            push(format!("{root_norm}/{rel}"));
+        }
+        push("/private/var/folders".to_string());
+        push("/tmp".to_string());
+    }
+    #[cfg(target_os = "windows")]
+    {
+        for rel in [
+            r"Downloads",
+            r"AppData\Local\Temp",
+            r"AppData\Local\Google\Chrome\User Data\Default\Cache",
+            r"AppData\Local\Microsoft\Edge\User Data\Default\Cache",
+            r"AppData\Local\Mozilla\Firefox\Profiles",
+        ] {
+            push(format!("{root_norm}\\{rel}"));
+        }
+        push(r"C:\$Recycle.Bin".to_string());
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        for rel in ["Downloads", ".cache", ".local/share/Trash"] {
+            push(format!("{root_norm}/{rel}"));
+        }
+        push("/tmp".to_string());
+        push("/var/tmp".to_string());
+    }
+
+    // Drop zones that don't exist or equal the root itself
+    zones.retain(|z| {
+        let zn = z.trim_end_matches(['/', '\\']);
+        zn != root_norm && std::path::Path::new(z).exists()
+    });
+
+    if zones.is_empty() {
+        vec![root.to_string()]
+    } else {
+        zones
     }
 }
 

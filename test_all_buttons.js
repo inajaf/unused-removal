@@ -23,9 +23,9 @@ function check(name, cond, extra = '') {
   // ============ SMART SCAN PHASE ============
   console.log('\n📋 SMART SCAN PHASE');
   check('Smart scan phase visible', await page.isVisible('#smart-scan-phase'));
-  check('btn-smart-scan exists', await page.isVisible('#btn-smart-scan'));
-  check('btn-smart-advanced exists', await page.isVisible('#btn-smart-advanced'));
-  check('safety selector exists', await page.isVisible('#smart-safety-level'));
+  check('safety cards exist (3)', (await page.$$('.safety-card')).length === 3);
+  check('settings button exists', await page.isVisible('#btn-open-settings'));
+  check('hidden safety select present', await page.$eval('#smart-safety-level', el => !!el));
 
   // Safety selector — all 3 options
   for (const level of ['safe', 'balanced', 'aggressive']) {
@@ -37,7 +37,7 @@ function check(name, cond, extra = '') {
 
   // ============ NAVIGATION: smart → config → smart ============
   console.log('\n📋 NAVIGATION');
-  await page.click('#btn-smart-advanced');
+  await page.click('#btn-open-settings');
   await page.waitForTimeout(400);
   check('Config phase visible after "Расширенные настройки"', await page.isVisible('#config-phase'));
 
@@ -47,7 +47,7 @@ function check(name, cond, extra = '') {
 
   // ============ CONFIG PHASE ============
   console.log('\n📋 CONFIG PHASE');
-  await page.click('#btn-smart-advanced');
+  await page.click('#btn-open-settings');
   await page.waitForTimeout(400);
 
   // Custom path toggle
@@ -101,11 +101,11 @@ function check(name, cond, extra = '') {
   await page.waitForTimeout(400);
   check('Back on smart scan', await page.isVisible('#smart-scan-phase'));
 
-  // Start smart scan
-  await page.click('#btn-smart-scan');
+  // Start smart scan — click the recommended safety card (one-click flow)
+  await page.click('.safety-card[data-level="balanced"]');
   await page.waitForTimeout(500);
   check('Smart scan progress shown', await page.isVisible('#smart-scan-progress'));
-  check('Smart scan button disabled during scan', await page.$eval('#btn-smart-scan', el => el.disabled));
+  check('Stop button visible during scan', await page.isVisible('#btn-smart-stop'));
 
   // Wait for completion (up to 30s)
   let smartResults = false;
@@ -148,16 +148,30 @@ function check(name, cond, extra = '') {
   await page.waitForTimeout(300);
   check('Category card collapses', !(await page.$eval('.category-card', el => el.classList.contains('expanded'))));
 
-  // Safety selector in results
-  for (const level of ['safe', 'balanced', 'aggressive']) {
-    await page.selectOption('#smart-results-safety', level);
-    await page.waitForTimeout(400);
-    check(`Results safety → ${level} re-renders cards`, (await page.$$eval('.category-card', els => els.length)) >= 0);
+  // Scan level info chip reflects the level used for this scan
+  const lvl = await page.$eval('#results-level-label', el => el.textContent);
+  check(`Results level chip shows "${lvl}"`, ['Безопасный','Сбалансированный','Агрессивный'].includes(lvl));
+
+  // "Show all files" opens detailed table filtered by category
+  await page.click('.category-card .category-toggle'); // expand samples area
+  await page.waitForTimeout(300);
+  const openBtn = await page.$('.category-card.expanded .category-open-list');
+  if (openBtn) {
+    const cat = await page.$eval('.category-open-list', el => el.dataset.openCategory);
+    await openBtn.click();
+    await page.waitForTimeout(700);
+    const onResults = await page.isVisible('#results-phase');
+    const filterVal = await page.$eval('#filter-category', el => el.value);
+    const rows = (await page.$$('#results-body tr')).length;
+    check(`Open list → results filtered by "${cat}" (${rows} rows)`, onResults && filterVal === cat && rows > 0);
   }
 
-  // "Просмотреть детально" → results table
-  await page.click('#btn-smart-review');
-  await page.waitForTimeout(600);
+
+  // "Просмотреть детально" → results table (skipped if open-list already brought us here)
+  if (await page.isVisible('#smart-results-phase')) {
+    await page.click('#btn-smart-review');
+    await page.waitForTimeout(600);
+  }
   check('Results table phase visible', await page.isVisible('#results-phase'));
 
   // ============ RESULTS TABLE ============

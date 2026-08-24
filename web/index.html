@@ -24,6 +24,9 @@
 </div>
 </div>
 <div class="header-actions">
+<button id="btn-open-settings" class="icon-btn" data-tooltip="Расширенные настройки сканирования" aria-label="Расширенные настройки">
+<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
+</button>
 <span class="version-badge">v1.0.0</span>
 </div>
 </div>
@@ -48,26 +51,100 @@
 <h3>Освободите место за секунды</h3>
 <p class="smart-scan-subtitle">Сканирует кэши браузеров, логи, временные файлы, старые загрузки, кэши разработчика и корзину</p>
 
-<div class="smart-scan-safety">
-<label class="safety-selector tooltip" data-tooltip="Выберите уровень агрессивности очистки. Безопасный — только очевидный мусор. Сбалансированный — рекомендуется для большинства. Агрессивный — максимальное освобождение места.">
-<span class="safety-label">Уровень безопасности</span>
-<select id="smart-safety-level">
-<option value="safe">🛡️ Безопасный — только кэши, логи, корзина, старые загрузки</option>
-<option value="balanced" selected>⚖️ Сбалансированный — + языки, бэкапы, вложения почты</option>
-<option value="aggressive">🔥 Агрессивный — всё включенное + образы дисков, скрытые файлы, дубликаты</option>
-</select>
-</label>
+<div class="hero-features" aria-hidden="true">
+  <span class="hero-feature">
+    <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+    100 000+ файлов/с
+  </span>
+  <span class="hero-feature">
+    <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+    Системные пути защищены
+  </span>
+  <span class="hero-feature">
+    <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 11 12 14 22 8"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+    Удаление в Корзину
+  </span>
+  <span class="hero-feature">
+    <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+    Инкрементальный кэш
+  </span>
 </div>
 
-<div class="smart-scan-actions">
-<button id="btn-smart-scan" class="btn btn-primary btn-xl">
-<svg class="btn-icon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
-<span>Запустить умную очистку</span>
-</button>
-<button id="btn-smart-advanced" class="btn btn-secondary btn-lg">
-<span>Расширенные настройки</span>
+<div class="scan-target">
+<span class="safety-label">Где сканировать</span>
+<div class="target-chips" id="target-chips" role="group" aria-label="Папка для сканирования"><!-- JS --></div>
+<div class="target-custom hidden" id="target-custom">
+<input type="text" id="target-custom-input" placeholder="Например: D:\Projects или C:\Users\Name\Downloads" autocomplete="off" spellcheck="false">
+<button type="button" id="btn-target-apply" class="btn btn-secondary btn-sm">
+<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+<span>Применить</span>
 </button>
 </div>
+</div>
+
+<div class="smart-scan-safety">
+<p class="safety-prompt">
+<span class="safety-prompt-dot" aria-hidden="true"></span>
+Выберите уровень защиты<span class="safety-prompt-accent">&nbsp;— сканирование начнётся сразу</span>
+</p>
+<select id="smart-safety-level" class="visually-hidden" tabindex="-1" aria-hidden="true">
+<option value="safe">Безопасный</option>
+<option value="balanced" selected>Сбалансированный</option>
+<option value="aggressive">Агрессивный</option>
+</select>
+
+<div class="safety-cards" id="safety-cards" role="group" aria-label="Уровень безопасности">
+
+<button type="button" class="safety-card" data-level="safe" title="Только очевидный мусор — максимальная осторожность">
+<span class="safety-card-icon lvl-safe" aria-hidden="true">
+<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><polyline points="9 11.5 11 13.5 15 9.5"/></svg>
+</span>
+<span class="safety-card-body">
+<span class="safety-card-title">Безопасный</span>
+<span class="safety-card-desc">Кэши, логи, корзина и старые загрузки — только очевидный мусор</span>
+</span>
+<span class="safety-card-go" aria-hidden="true">
+<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+<span>Запустить</span>
+</span>
+</button>
+
+<button type="button" class="safety-card is-recommended" data-level="balanced" title="Оптимальный баланс освобождения и безопасности">
+<span class="safety-card-tag">Рекомендуем</span>
+<span class="safety-card-icon lvl-balanced" aria-hidden="true">
+<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 16l3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1z"/><path d="M2 16l3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1z"/><path d="M7 21h10"/><path d="M12 3v18"/><path d="M3 7h2c2 0 5-1 7-2 2 1 5 2 7 2h2"/></svg>
+</span>
+<span class="safety-card-body">
+<span class="safety-card-title">Сбалансированный</span>
+<span class="safety-card-desc">Дополнительно локализации, бэкапы и вложения почты</span>
+</span>
+<span class="safety-card-go" aria-hidden="true">
+<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+<span>Запустить</span>
+</span>
+</button>
+
+<button type="button" class="safety-card" data-level="aggressive" title="Максимальное освобождение места">
+<span class="safety-card-icon lvl-aggressive" aria-hidden="true">
+<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/></svg>
+</span>
+<span class="safety-card-body">
+<span class="safety-card-title">Агрессивный</span>
+<span class="safety-card-desc">Всё выше + образы дисков, скрытые файлы и дубликаты</span>
+</span>
+<span class="safety-card-go" aria-hidden="true">
+<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+<span>Запустить</span>
+</span>
+</button>
+
+</div>
+</div>
+
+<p class="hero-trust">
+<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+Ничего не удаляется без вашего подтверждения — файлы отправляются в Корзину и могут быть восстановлены
+</p>
 
 <div id="smart-scan-progress" class="smart-scan-progress hidden">
 <div class="progress-ring" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">
@@ -85,7 +162,16 @@
 <span id="smart-progress-percent">0</span><span class="progress-percent-label">%</span>
 </div>
 </div>
+<div class="smart-progress-stats">
+<span><strong id="smart-progress-dirs">0</strong> папок</span>
+<span><strong id="smart-progress-files">0</strong> файлов</span>
+<span id="smart-progress-errors" class="hidden" title="Часть папок закрыта правами macOS (Full Disk Access)">⚠ <strong id="smart-progress-errors-n">0</strong> недоступно</span>
+</div>
 <p id="smart-progress-desc">Подготовка…</p>
+<button id="btn-smart-stop" class="btn btn-secondary btn-sm smart-stop-btn hidden">
+<svg class="btn-icon" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+<span>Остановить сканирование</span>
+</button>
 </div>
 </div>
 </section>
@@ -242,19 +328,14 @@
 <section id="smart-results-phase" class="panel phase-panel hidden" data-phase="smart-results">
 <header class="panel-header">
 <h2><span class="step-number">★</span> Результаты умной очистки</h2>
-<p class="panel-desc">Найдено <strong id="smart-summary-total">0</strong> файлов, можно освободить <strong id="smart-summary-size">0 B</strong></p>
+<p class="panel-desc">Найдено <strong id="smart-summary-total">0</strong> файлов, можно освободить <strong id="smart-summary-size">0 B</strong> · Папка: <span id="smart-scan-root" class="scan-root">—</span></p>
 </header>
 
 <div class="smart-results-toolbar">
-<div class="safety-selector-toolbar">
-<label class="safety-selector tooltip" data-tooltip="Измените уровень безопасности для повторной фильтрации результатов. Безопасный — только очевидный мусор. Сбалансированный — рекомендуется. Агрессивный — включает образы дисков, скрытые файлы, дубликаты.">
-<span class="safety-label">Безопасность</span>
-<select id="smart-results-safety">
-<option value="safe">🛡️ Безопасный</option>
-<option value="balanced" selected>⚖️ Сбалансированный</option>
-<option value="aggressive">🔥 Агрессивный</option>
-</select>
-</label>
+<div class="scan-level-info tooltip" data-tooltip="Уровень задаётся карточкой на главном экране перед запуском сканирования">
+<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><polyline points="9 11.5 11 13.5 15 9.5"/></svg>
+<span>Уровень сканирования:</span>
+<strong id="results-level-label">Сбалансированный</strong>
 </div>
 <div class="smart-summary-actions">
 <button id="btn-smart-clean-all" class="btn btn-primary btn-lg">
@@ -317,9 +398,21 @@
 
 <!-- Phase 4: Detailed Results (Traditional Table) -->
 <section id="results-phase" class="panel phase-panel hidden" data-phase="results">
-<header class="panel-header">
+<header class="panel-header panel-header-actions">
+<div class="panel-header-titles">
 <h2><span class="step-number">3</span> Результаты</h2>
 <p class="panel-desc">Найдено <strong id="summary-total">0</strong> находок (<span id="summary-cats">—</span>)</p>
+</div>
+<div class="header-nav">
+<button id="btn-results-smart" class="btn btn-ghost btn-sm">
+<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+<span>Умная очистка</span>
+</button>
+<button id="btn-results-config" class="btn btn-secondary btn-sm">
+<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+<span>Новое сканирование</span>
+</button>
+</div>
 </header>
 
 <div class="results-toolbar">
