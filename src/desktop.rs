@@ -4,8 +4,8 @@
 //! 127.0.0.1 and the webview simply points at it — the entire existing code
 //! path (scanner, rules, API, assets) is reused as-is.
 
-use anyhow::Result;
 use crate::config::Config;
+use anyhow::Result;
 use std::time::Duration;
 
 /// Launch the desktop application: background server + native window.
@@ -27,11 +27,9 @@ pub fn run_app(mut cfg: Config, port_override: Option<u16>) -> Result<()> {
                 .build()
                 .expect("failed to build tokio runtime");
             let tx = ready_tx;
-            if let Err(e) =
-                rt.block_on(crate::server::run_server_ready(srv_cfg, move |port| {
-                    let _ = tx.send(port);
-                }))
-            {
+            if let Err(e) = rt.block_on(crate::server::run_server_ready(srv_cfg, move |port| {
+                let _ = tx.send(port);
+            })) {
                 eprintln!("[unused-removal] server error: {e:#}");
             }
         })?;
@@ -39,9 +37,7 @@ pub fn run_app(mut cfg: Config, port_override: Option<u16>) -> Result<()> {
     // 2) Wait for the bound port, then open the native window
     let port = match ready_rx.recv_timeout(Duration::from_secs(15)) {
         Ok(p) => p,
-        Err(_) => anyhow::bail!(
-            "UI server did not start — try launching with --port <free port>"
-        ),
+        Err(_) => anyhow::bail!("UI server did not start — try launching with --port <free port>"),
     };
     show_window(&format!("http://127.0.0.1:{port}"))
 }
@@ -60,15 +56,17 @@ fn show_window(url: &str) -> Result<()> {
         .with_min_inner_size(LogicalSize::new(760.0_f64, 560.0_f64))
         .build(&event_loop)?;
 
-    let _webview = wry::WebViewBuilder::new()
-        .with_url(url)
-        .build(&window)?;
+    let _webview = wry::WebViewBuilder::new().with_url(url).build(&window)?;
 
     // Blocks until the window is closed (`run` never returns).
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Wait;
 
-        if let Event::WindowEvent { event: WindowEvent::CloseRequested, .. } = event {
+        if let Event::WindowEvent {
+            event: WindowEvent::CloseRequested,
+            ..
+        } = event
+        {
             *control_flow = ControlFlow::Exit;
         }
     });

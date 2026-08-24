@@ -48,8 +48,8 @@ fi
 codesign --force --sign - "$APP" >/dev/null 2>&1 || true
 
 echo "✔ Built $APP"
-[ "${1:-}" = "--dmg" ] && {
+if [ "${1:-}" = "--dmg" ]; then
     hdiutil create -volname "Unused Removal" -srcfolder "$APP" -ov -format UDZO \
         "target/release/${APP_NAME}-${VERSION}.dmg" >/dev/null
     echo "✔ Built target/release/${APP_NAME}-${VERSION}.dmg"
-}
+fi

@@ -53,19 +53,20 @@ conflict. `--port` overrides it if needed.
 
 ### Web UI (recommended)
 
-### Web UI (recommended)
-
 ```bash
 unused-removal serve --port 8080
 # Opens http://127.0.0.1:8080 in your browser
 ```
 
-1. Select a drive or folder (C:\, D:\, /home, custom path)
-2. Adjust options (workers, cache, duplicates, system protection)
-3. Click **Start Scan**
-4. Filter, sort, and select files in the results table
-5. **Move to Trash** — safe, recoverable
-6. **Delete Permanently** — only after explicit confirmation
+1. Select a drive or folder (C:\, D:\, /home, custom path).
+2. Choose **Safe** or **Balanced** for a fast scan of known junk locations, or
+   **Aggressive** to scan the complete selected tree.
+3. Review categories, then open any category in the detailed results table if needed.
+4. **Move to Trash** — safe, recoverable.
+5. **Delete Permanently** — only after explicit confirmation.
+
+Advanced settings remain available for worker count, cache, duplicate detection,
+symlink handling, and system protection. Detailed results load up to 50,000 items.
 
 ### CLI — Scan
 
@@ -120,8 +121,6 @@ junk_extensions = [".tmp", ".temp", ".bak", ".old", ".dmp", ".chk", "~$*"]
 junk_dirs = [
   "/tmp",
   "/var/tmp",
-  "~/Library/Caches",
-  "~/.cache",
   "%TEMP%",
   "C:\\Windows\\Temp",
   "C:\\Windows\\Prefetch"
@@ -129,7 +128,6 @@ junk_dirs = [
 
 # Excluded from traversal
 exclude_dirs = [
-  "$Recycle.Bin",
   "System Volume Information",
   "Windows\\WinSxS",
   "/proc",

@@ -1,16 +1,16 @@
 //! Unix/macOS-specific file system scanner using jwalk (parallel walk)
 //! with rayon for parallel metadata stat.
 
+use rayon::prelude::*;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::SystemTime;
-use rayon::prelude::*;
 
 use crate::cache::Cache;
-use crate::scanner_types::{Attrs, CacheEntry, Fingerprint, FileRecord, ScanError, Options};
 use crate::scanner::platform::Progress;
+use crate::scanner_types::{Attrs, CacheEntry, FileRecord, Fingerprint, Options, ScanError};
 
 /// Unix/macOS walker: jwalk parallel directory traversal + rayon parallel stat
 pub struct UnixWalker {
@@ -24,14 +24,20 @@ pub struct UnixWalker {
 
 impl UnixWalker {
     pub fn new(opts: Options, progress: Progress, cache: Option<Arc<dyn Cache>>) -> Self {
-        let workers = if opts.workers == 0 { num_cpus::get() } else { opts.workers };
+        let workers = if opts.workers == 0 {
+            num_cpus::get()
+        } else {
+            opts.workers
+        };
 
         let mut exclude_set = std::collections::HashSet::with_capacity(opts.exclude.len());
         for e in &opts.exclude {
             exclude_set.insert(e.trim_end_matches(['\\', '/']).to_lowercase());
         }
         let mut pref_lower = Vec::with_capacity(opts.exclude_pref.len());
-        for p in &opts.exclude_pref { pref_lower.push(p.trim_end_matches(['\\', '/']).to_lowercase()); }
+        for p in &opts.exclude_pref {
+            pref_lower.push(p.trim_end_matches(['\\', '/']).to_lowercase());
+        }
 
         Self {
             opts: Options { workers, ..opts },
@@ -61,7 +67,7 @@ impl UnixWalker {
             .skip_hidden(false)
             .into_iter()
             .filter_map(|entry| entry.ok())
-            .take_while(|entry| !self.stopped.load(Ordering::Relaxed))
+            .take_while(|_| !self.stopped.load(Ordering::Relaxed))
             .filter_map(|entry| {
                 let ft = entry.file_type();
                 if ft.is_dir() {
@@ -73,7 +79,8 @@ impl UnixWalker {
                     if self.is_excluded_path(&path_str) {
                         None
                     } else {
-                        let parent = path.parent()
+                        let parent = path
+                            .parent()
                             .map(|p| p.to_string_lossy().to_string())
                             .unwrap_or_else(|| root_str.clone());
                         Some((parent, path_str))
@@ -96,65 +103,79 @@ impl UnixWalker {
         // --- Phase 2: parallel stat per directory (with cache support) ---
         let dirs: Vec<String> = dir_map.keys().cloned().collect();
 
-        let results: Vec<(Vec<FileRecord>, Vec<ScanError>, bool)> = dirs.par_iter().map(|dir| {
-            let files = &dir_map[dir];
-            let mut recs = Vec::with_capacity(files.len());
-            let mut errs = Vec::new();
-            let mut from_cache = false;
+        let results: Vec<(Vec<FileRecord>, Vec<ScanError>, bool)> = dirs
+            .par_iter()
+            .map(|dir| {
+                let files = &dir_map[dir];
+                let mut recs = Vec::with_capacity(files.len());
+                let mut errs = Vec::new();
+                let mut from_cache = false;
 
-            if let Some(cache) = &self.cache {
-                if let Ok(meta) = std::fs::metadata(dir) {
-                    let fp = Fingerprint {
-                        mod_time_ns: meta.modified()
-                            .ok()
-                            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                            .map(|d| d.as_nanos() as i64)
-                            .unwrap_or(0),
-                    };
-                    let cache_key = dir.to_lowercase();
-                    if let Some(entry) = cache.lookup(&cache_key, &fp) {
-                        for f in &entry.files {
-                            self.progress.add_file(f.size);
-                            recs.push(f.clone());
-                        }
-                        self.progress.add_cached();
-                        from_cache = true;
-                    } else {
-                        for f in files {
-                            if self.stopped.load(Ordering::Relaxed) { break; }
-                            match stat_file(f) {
-                                Ok(rec) => {
-                                    self.progress.add_file(rec.size);
-                                    recs.push(rec);
+                if let Some(cache) = &self.cache {
+                    if let Ok(meta) = std::fs::metadata(dir) {
+                        let fp = Fingerprint {
+                            mod_time_ns: meta
+                                .modified()
+                                .ok()
+                                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                                .map(|d| d.as_nanos() as i64)
+                                .unwrap_or(0),
+                        };
+                        let cache_key = dir.to_lowercase();
+                        if let Some(entry) = cache.lookup(&cache_key, &fp) {
+                            for f in &entry.files {
+                                self.progress.add_file(f.size);
+                                recs.push(f.clone());
+                            }
+                            self.progress.add_cached();
+                            from_cache = true;
+                        } else {
+                            for f in files {
+                                if self.stopped.load(Ordering::Relaxed) {
+                                    break;
                                 }
-                                Err(e) => errs.push(ScanError { path: f.clone(), error: e.to_string() }),
+                                match stat_file(f) {
+                                    Ok(rec) => {
+                                        self.progress.add_file(rec.size);
+                                        recs.push(rec);
+                                    }
+                                    Err(e) => errs.push(ScanError {
+                                        path: f.clone(),
+                                        error: e.to_string(),
+                                    }),
+                                }
+                            }
+                            if !self.stopped.load(Ordering::Relaxed) {
+                                let cache_entry = CacheEntry {
+                                    fingerprint: fp,
+                                    files: recs.clone(),
+                                    dirs: Vec::new(),
+                                };
+                                let _ = cache.save(&cache_key, cache_entry);
                             }
                         }
-                        if !self.stopped.load(Ordering::Relaxed) {
-                            let cache_entry = CacheEntry {
-                                fingerprint: fp,
-                                files: recs.clone(),
-                                dirs: Vec::new(),
-                            };
-                            let _ = cache.save(&cache_key, cache_entry);
+                    }
+                } else {
+                    for f in files {
+                        if self.stopped.load(Ordering::Relaxed) {
+                            break;
+                        }
+                        match stat_file(f) {
+                            Ok(rec) => {
+                                self.progress.add_file(rec.size);
+                                recs.push(rec);
+                            }
+                            Err(e) => errs.push(ScanError {
+                                path: f.clone(),
+                                error: e.to_string(),
+                            }),
                         }
                     }
                 }
-            } else {
-                for f in files {
-                    if self.stopped.load(Ordering::Relaxed) { break; }
-                    match stat_file(f) {
-                        Ok(rec) => {
-                            self.progress.add_file(rec.size);
-                            recs.push(rec);
-                        }
-                        Err(e) => errs.push(ScanError { path: f.clone(), error: e.to_string() }),
-                    }
-                }
-            }
 
-            (recs, errs, from_cache)
-        }).collect();
+                (recs, errs, from_cache)
+            })
+            .collect();
 
         self.progress.finish();
 
@@ -164,7 +185,9 @@ impl UnixWalker {
         for (r, e, c) in results {
             recs.extend(r);
             errs.extend(e);
-            if c { cached_count += 1; }
+            if c {
+                cached_count += 1;
+            }
         }
 
         if let Some(cache) = &self.cache {
@@ -230,7 +253,7 @@ impl crate::scanner::platform::PlatformWalker for UnixWalker {
     fn walk(&self, root: &str) -> anyhow::Result<(Vec<FileRecord>, Vec<ScanError>)> {
         self.walk(root)
     }
-    
+
     fn stop(&self) {
         self.stop()
     }
