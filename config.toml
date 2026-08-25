@@ -1,8 +1,7 @@
-root = "/Users/eldar"
-workers = 4
-follow_links = true
+root = "/Users/eldar/Downloads"
+workers = 8
+follow_links = false
 exclude_dirs = [
-    ".Trash",
     "/System",
     "/Library",
     "/private",
@@ -25,14 +24,11 @@ junk_extensions = [
     ".DS_Store",
 ]
 junk_dirs = [
-    "/var/folders/5d/bdzp8fbd71sdf29qkwr3g64m0000gn/T/",
     "/tmp",
     "/private/tmp",
     "/var/folders",
-    "/Users/eldar/Library/Caches",
-    "/Users/eldar/Library/Logs",
 ]
-check_duplicates = true
+check_duplicates = false
 smart_junk_enabled = true
 scan_user_caches = true
 scan_system_logs = true
@@ -49,9 +45,9 @@ old_download_days = 30
 unused_disk_image_days = 60
 large_hidden_bytes = 52428800
 min_cache_size_bytes = 10485760
-protect_system = false
+protect_system = true
 allow_protected = false
 smart_junk_safety_level = "balanced"
 use_cache = false
 cache_dir = ""
-web_port = 3082
+web_port = 51737

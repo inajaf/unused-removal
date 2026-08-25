@@ -24,7 +24,7 @@ const { chromium } = require('playwright');
   
   // Test 2: Config phase accessible
   console.log('\n📋 Test 2: Config phase accessible');
-  await page.evaluate(() => document.getElementById('btn-smart-advanced').click());
+  await page.evaluate(() => document.getElementById('btn-open-settings').click());
   await page.waitForTimeout(300);
   const configPhase = await page.$('#config-phase');
   const isConfigVisible = await configPhase.isVisible();
@@ -36,7 +36,7 @@ const { chromium } = require('playwright');
   
   // Test 3: Check all form elements (navigate to config first)
   console.log('\n📋 Test 3: Config phase form elements');
-  await page.evaluate(() => document.getElementById('btn-smart-advanced').click());
+  await page.evaluate(() => document.getElementById('btn-open-settings').click());
   await page.waitForTimeout(300);
   const rootSelect = await page.$('#root-select');
   const workers = await page.$('#workers');
@@ -65,13 +65,13 @@ const { chromium } = require('playwright');
   await page.evaluate(() => document.getElementById('btn-scan').click());
   await page.waitForTimeout(300);
   
-  // Test 6: Buttons present
-  console.log('\n📋 Test 6: Smart Scan buttons present');
-  const btnSmartScan = await page.$('#btn-smart-scan');
-  const btnSmartAdvanced = await page.$('#btn-smart-advanced');
-  console.log(`   Smart Scan button: ${!!btnSmartScan}`);
-  console.log(`   Advanced button: ${!!btnSmartAdvanced}`);
-  console.log(`   Smart Scan button enabled: ${await btnSmartScan.isEnabled()}`);
+  // Test 6: Controls present
+  console.log('\n📋 Test 6: Smart Scan controls present');
+  const btnSmartScan = await page.$('#btn-open-settings');
+  const btnSmartAdvanced = await page.$$('.safety-card');
+  console.log(`   Settings button: ${!!btnSmartScan}`);
+  console.log(`   Safety cards: ${btnSmartAdvanced.length}`);
+  console.log(`   Settings enabled: ${await btnSmartScan.isEnabled()}`);
   
   // Test 7: Smart safety selector
   console.log('\n📋 Test 7: Safety level selector');
@@ -106,7 +106,7 @@ const { chromium } = require('playwright');
     select.value = '';
     select.dispatchEvent(new Event('change'));
   });
-  await page.evaluate(() => document.getElementById('btn-smart-scan').click());
+  await page.evaluate(() => document.querySelector('.safety-card').click());
   await page.waitForTimeout(500);
   const toasts = await page.$$('.toast');
   console.log(`   Toast shown: ${toasts.length > 0}`);
@@ -117,7 +117,7 @@ const { chromium } = require('playwright');
   
   // Test 9: Select a root path
   console.log('\n📋 Test 9: Select root path');
-  await page.evaluate(() => document.getElementById('btn-smart-advanced').click());
+  await page.evaluate(() => document.getElementById('btn-open-settings').click());
   await page.waitForTimeout(300);
   const options = await page.$$eval('#root-select option', opts => opts.map(o => o.value));
   console.log(`   Available options: ${options.join(', ')}`);
@@ -130,7 +130,7 @@ const { chromium } = require('playwright');
   
   // Test 8: Check CSS animations are working (check computed styles)
   console.log('\n📋 Test 8: CSS animations/transition present');
-  await page.evaluate(() => document.getElementById('btn-smart-advanced').click());
+  await page.evaluate(() => document.getElementById('btn-open-settings').click());
   await page.waitForTimeout(300);
   const transitionCheck = await page.evaluate(() => {
     const panel = document.querySelector('.panel');

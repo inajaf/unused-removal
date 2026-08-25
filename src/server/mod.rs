@@ -1,11 +1,12 @@
 //! HTTP server with embedded web UI and REST API
 
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
-use std::collections::HashMap;
 use std::str::FromStr;
+use std::sync::{Arc, Mutex};
 
+use axum::body::Body;
 use axum::{
     extract::{Query, State},
     http::StatusCode,
@@ -13,18 +14,17 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use axum::body::Body;
-use rust_embed::RustEmbed;
 use mime_guess::from_path;
+use rust_embed::RustEmbed;
 use tokio::signal;
-use tracing::{info, error};
+use tracing::{error, info};
 
+use crate::cache::{config_hash as cache_config_hash, BoltCache, Cache};
+use crate::cleaner::{hard_delete, recycle_bin, DeleteResult};
 use crate::config::Config;
-use crate::scanner::{Scanner, Progress};
-use crate::scanner_types::{Options, FileRecord, ScanError};
-use crate::cache::{Cache, BoltCache, config_hash as cache_config_hash};
-use crate::rules::{Engine, Finding, Category};
-use crate::cleaner::{recycle_bin, hard_delete, DeleteResult};
+use crate::rules::{Category, Engine, Finding};
+use crate::scanner::{Progress, Scanner};
+use crate::scanner_types::{FileRecord, Options, ScanError};
 
 #[derive(RustEmbed)]
 #[folder = "web/"]
@@ -62,8 +62,8 @@ impl ServerState {
 
 /// API request/response types
 mod api {
-    use serde::{Deserialize, Serialize};
     use super::*;
+    use serde::{Deserialize, Serialize};
 
     #[derive(Deserialize)]
     pub struct ScanRequest {
@@ -143,7 +143,7 @@ mod api {
         fn from(c: &Config) -> Self {
             let os = std::env::consts::OS.to_string();
             let mut default_paths = Vec::new();
-            
+
             #[cfg(target_os = "macos")]
             {
                 if let Some(home) = dirs::home_dir() {
@@ -200,8 +200,8 @@ mod api {
 
 /// Smart Scan API types
 mod smart_api {
-    use serde::{Deserialize, Serialize};
     use super::*;
+    use serde::{Deserialize, Serialize};
 
     #[derive(Serialize)]
     pub struct SmartCategorySummary {
@@ -224,8 +224,8 @@ mod smart_api {
 
     #[derive(Deserialize)]
     pub struct SmartCleanRequest {
-        pub categories: Vec<String>,  // Category names to clean
-        pub mode: String,             // "recycle" or "hard"
+        pub categories: Vec<String>, // Category names to clean
+        pub mode: String,            // "recycle" or "hard"
     }
 
     #[derive(Serialize)]
@@ -260,31 +260,58 @@ pub fn create_router(state: ServerState) -> Router {
         .with_state(state)
 }
 
-/// Start the HTTP server
+/// Start the HTTP server and open the user's default browser
 pub async fn run_server(config: Config) -> anyhow::Result<()> {
-    let state = ServerState::new(config);
-    let port = state.config.lock().unwrap().web_port;
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
-    
-    let app = create_router(state.clone());
-    
-    info!("Starting web server on http://{}", addr);
-    
-    let url = format!("http://{}", addr);
+    let url = format!("http://127.0.0.1:{}", config.web_port);
     tokio::spawn(async move {
         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
         let _ = open::that(&url);
     });
 
+    run_server_headless(config).await
+}
+
+/// Start the HTTP server without opening a browser (used by the desktop shell)
+pub async fn run_server_headless(config: Config) -> anyhow::Result<()> {
+    run_server_ready(config, |_| {}).await
+}
+
+/// Bind the server (resolving an ephemeral port when `web_port == 0`),
+/// report the actually bound port via `on_ready`, then serve until shutdown.
+pub async fn run_server_ready<F>(config: Config, on_ready: F) -> anyhow::Result<()>
+where
+    F: FnOnce(u16),
+{
+    let state = ServerState::new(config);
+    let requested = state.config.lock().unwrap().web_port;
+    let addr = SocketAddr::from(([127, 0, 0, 1], requested));
+
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app).with_graceful_shutdown(shutdown_signal()).await?;
-    
+    let actual = listener.local_addr()?.port();
+
+    {
+        let mut c = state.config.lock().unwrap();
+        c.web_port = actual;
+    }
+
+    let app = create_router(state.clone());
+
+    info!("Starting web server on http://127.0.0.1:{}", actual);
+
+    on_ready(actual);
+
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
+
     Ok(())
 }
 
 async fn shutdown_signal() {
     let ctrl_c = async {
-        signal::ctrl_c().await.expect("Failed to install Ctrl+C handler");
+        signal::ctrl_c()
+            .await
+            .expect("Failed to install Ctrl+C handler");
     };
     #[cfg(unix)]
     let terminate = async {
@@ -308,9 +335,11 @@ async fn handle_scan(
     Json(req): Json<ScanRequest>,
 ) -> impl IntoResponse {
     let mut cfg = state.config.lock().unwrap().clone();
-    
+
     cfg.root = req.root;
-    if let Some(w) = req.workers { cfg.workers = w; }
+    if let Some(w) = req.workers {
+        cfg.workers = w;
+    }
     cfg.follow_links = req.follow_links;
     cfg.use_cache = req.use_cache;
     cfg.check_duplicates = req.check_duplicates;
@@ -322,7 +351,7 @@ async fn handle_scan(
         *scan_id += 1;
         *scan_id
     };
-    
+
     // Drop the previous scanner (and its open redb DB handle) BEFORE creating
     // a new one — redb locks the database file, so a second Database::create
     // on the same path fails silently unless the old handle is released first.
@@ -335,13 +364,13 @@ async fn handle_scan(
         }
         *lock = None;
     }
-    
+
     *state.findings.lock().unwrap() = Vec::new();
     *state.records.lock().unwrap() = Vec::new();
     *state.errors.lock().unwrap() = Vec::new();
     *state.scan_done.lock().unwrap() = false;
     *state.cancel_flag.lock().unwrap() = false;
-    
+
     let progress = Progress::new();
     *state.progress.lock().unwrap() = Some(progress.clone());
 
@@ -354,42 +383,58 @@ async fn handle_scan(
 
     let cache: Option<Arc<dyn Cache>> = if cfg.use_cache {
         let hash = cache_config_hash(&opts);
-        BoltCache::new("unused-removal", &hash).ok().map(|c| Arc::new(c) as Arc<dyn Cache>)
-    } else { None };
+        BoltCache::new("unused-removal", &hash)
+            .ok()
+            .map(|c| Arc::new(c) as Arc<dyn Cache>)
+    } else {
+        None
+    };
 
     let scanner = Scanner::new(opts, progress, cache);
     *state.scanner.lock().unwrap() = Some(scanner.clone());
-    
+
     let root = cfg.root.clone();
     let state_clone = state.clone();
     let cfg_clone = cfg.clone();
-    
+
     tokio::spawn(async move {
         let root_for_walk = root.clone();
         let recs_result = tokio::task::spawn_blocking(move || scanner.walk(&root_for_walk)).await;
-        
+
         let (recs, errs) = match recs_result {
             Ok(Ok((r, e))) => (r, e),
             Ok(Err(e)) => {
                 error!("Scan error: {}", e);
-                (Vec::new(), vec![ScanError { path: root.clone(), error: e.to_string() }])
+                (
+                    Vec::new(),
+                    vec![ScanError {
+                        path: root.clone(),
+                        error: e.to_string(),
+                    }],
+                )
             }
             Err(e) => {
                 error!("Scan task panicked: {}", e);
-                (Vec::new(), vec![ScanError { path: root, error: "Scan panicked".to_string() }])
+                (
+                    Vec::new(),
+                    vec![ScanError {
+                        path: root,
+                        error: "Scan panicked".to_string(),
+                    }],
+                )
             }
         };
 
         let engine = Engine::new(Arc::new(cfg_clone.clone()));
         let mut findings = engine.analyze(&recs);
-        
+
         if cfg_clone.check_duplicates {
             let dups = engine.find_duplicates(&recs);
             findings.extend(dups);
         }
-        
+
         findings.sort_by(|a, b| b.size.cmp(&a.size));
-        
+
         if let Some(p) = state_clone.progress.lock().unwrap().as_ref() {
             p.finish();
         }
@@ -398,8 +443,11 @@ async fn handle_scan(
         *state_clone.findings.lock().unwrap() = findings;
         *state_clone.scan_done.lock().unwrap() = true;
     });
-    
-    Json(ScanResponse { scan_id, status: "started".to_string() })
+
+    Json(ScanResponse {
+        scan_id,
+        status: "started".to_string(),
+    })
 }
 
 async fn handle_stop(State(state): State<ServerState>) -> impl IntoResponse {
@@ -417,11 +465,19 @@ async fn handle_stop(State(state): State<ServerState>) -> impl IntoResponse {
 async fn handle_progress(State(state): State<ServerState>) -> Response {
     let progress = state.progress.lock().unwrap().clone();
     let done = *state.scan_done.lock().unwrap();
-    
+
     if let Some(p) = progress {
-        Json(ProgressResponse { progress: p.snapshot(), done }).into_response()
+        Json(ProgressResponse {
+            progress: p.snapshot(),
+            done,
+        })
+        .into_response()
     } else {
-        (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": "no scan in progress" }))).into_response()
+        (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "no scan in progress" })),
+        )
+            .into_response()
     }
 }
 
@@ -430,32 +486,33 @@ async fn handle_results(
     Query(params): Query<ResultsParams>,
 ) -> impl IntoResponse {
     let findings = state.findings.lock().unwrap().clone();
-    
+
     let mut filtered = findings.clone();
-    
+
     if let Some(cat) = params.category {
         if let Ok(category) = Category::from_str(&cat) {
             filtered.retain(|f| f.category == category);
         }
     }
-    
+
     if let Some(search) = params.search {
         let search = search.to_lowercase();
         filtered.retain(|f| {
-            f.path.to_lowercase().contains(&search) || 
-            f.reason.to_lowercase().contains(&search)
+            f.path.to_lowercase().contains(&search) || f.reason.to_lowercase().contains(&search)
         });
     }
-    
+
     let total = findings.len();
     let offset = params.offset.unwrap_or(0);
     let limit = params.limit.unwrap_or(filtered.len());
-    
-    let paginated: Vec<Finding> = filtered.clone().into_iter()
+
+    let paginated: Vec<Finding> = filtered
+        .clone()
+        .into_iter()
         .skip(offset)
         .take(limit)
         .collect();
-    
+
     Json(ResultsResponse {
         total,
         filtered: filtered.len(),
@@ -468,20 +525,28 @@ async fn handle_delete(
     Json(req): Json<DeleteRequest>,
 ) -> Response {
     if req.paths.is_empty() {
-        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": "no paths provided" }))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "no paths provided" })),
+        )
+            .into_response();
     }
-    
+
     let result: Result<DeleteResult, anyhow::Error> = if req.mode == "hard" {
         hard_delete(&req.paths)
     } else {
         recycle_bin(&req.paths)
     };
-    
+
     match result {
         Ok(res) => {
             let deleted_set: std::collections::HashSet<_> = res.deleted.iter().cloned().collect();
-            state.findings.lock().unwrap().retain(|f| !deleted_set.contains(&f.path));
-            
+            state
+                .findings
+                .lock()
+                .unwrap()
+                .retain(|f| !deleted_set.contains(&f.path));
+
             let failed_count = res.failed.len();
             Json(DeleteResponse {
                 deleted: res.deleted.len(),
@@ -489,12 +554,14 @@ async fn handle_delete(
                 total_bytes: res.total_bytes,
                 errors: res.failed,
                 success: failed_count == 0,
-            }).into_response()
+            })
+            .into_response()
         }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e.to_string() }))
-        ).into_response()
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
     }
 }
 
@@ -538,7 +605,8 @@ async fn handle_put_config(
 
     if let Err(e) = cfg.save(Path::new("config.toml")) {
         error!("Failed to save config: {}", e);
-        return Json(serde_json::json!({ "status": "saved_memory", "warning": e.to_string() })).into_response();
+        return Json(serde_json::json!({ "status": "saved_memory", "warning": e.to_string() }))
+            .into_response();
     }
 
     Json(serde_json::json!({ "status": "saved" })).into_response()
@@ -548,13 +616,16 @@ async fn handle_export(
     State(state): State<ServerState>,
     Query(params): Query<HashMap<String, String>>,
 ) -> Response {
-    let format = params.get("format").cloned().unwrap_or_else(|| "json".to_string());
+    let format = params
+        .get("format")
+        .cloned()
+        .unwrap_or_else(|| "json".to_string());
     let findings = state.findings.lock().unwrap().clone();
-    
+
     if findings.is_empty() {
         return (StatusCode::BAD_REQUEST, "no scan results").into_response();
     }
-    
+
     match format.as_str() {
         "csv" => {
             let mut csv = String::new();
@@ -572,7 +643,10 @@ async fn handle_export(
             }
             Response::builder()
                 .header("Content-Type", "text/csv")
-                .header("Content-Disposition", "attachment; filename=\"unused-removal-report.csv\"")
+                .header(
+                    "Content-Disposition",
+                    "attachment; filename=\"unused-removal-report.csv\"",
+                )
                 .body(Body::from(csv))
                 .unwrap()
         }
@@ -580,20 +654,20 @@ async fn handle_export(
             let json = serde_json::to_string_pretty(&findings).unwrap();
             Response::builder()
                 .header("Content-Type", "application/json")
-                .header("Content-Disposition", "attachment; filename=\"unused-removal-report.json\"")
+                .header(
+                    "Content-Disposition",
+                    "attachment; filename=\"unused-removal-report.json\"",
+                )
                 .body(Body::from(json))
                 .unwrap()
         }
     }
 }
 
-async fn handle_static(
-    State(_state): State<ServerState>,
-    uri: axum::http::Uri,
-) -> Response {
+async fn handle_static(State(_state): State<ServerState>, uri: axum::http::Uri) -> Response {
     let path = uri.path().trim_start_matches('/');
     let path = if path.is_empty() { "index.html" } else { path };
-    
+
     match WebAssets::get(path) {
         Some(content) => {
             let mime = from_path(path).first_or_octet_stream();
@@ -619,7 +693,9 @@ async fn handle_static(
 fn escape_csv(s: &str) -> String {
     if s.contains(',') || s.contains('"') || s.contains('\n') {
         format!("\"{}\"", s.replace('"', "\"\""))
-    } else { s.to_string() }
+    } else {
+        s.to_string()
+    }
 }
 
 fn format_time(t: std::time::SystemTime) -> String {
@@ -629,11 +705,9 @@ fn format_time(t: std::time::SystemTime) -> String {
 
 // ========== Smart Scan Handlers ==========
 
-async fn handle_smart_scan(
-    State(state): State<ServerState>,
-) -> impl IntoResponse {
+async fn handle_smart_scan(State(state): State<ServerState>) -> impl IntoResponse {
     let mut cfg = state.config.lock().unwrap().clone();
-    
+
     // Enable all smart junk categories for smart scan
     cfg.smart_junk_enabled = true;
     cfg.scan_user_caches = true;
@@ -647,7 +721,9 @@ async fn handle_smart_scan(
     cfg.scan_dev_caches = true;
     cfg.scan_ide_caches = true;
     cfg.scan_large_hidden = true;
-    cfg.check_duplicates = true;
+    // NOTE: duplicate hashing is expensive and only surfaces in the
+    // `aggressive` safety level — respect the caller's config instead of
+    // forcing it on (a balanced scan of a large home dir must stay fast).
 
     // Increment scan id
     let scan_id = {
@@ -670,7 +746,7 @@ async fn handle_smart_scan(
     *state.errors.lock().unwrap() = Vec::new();
     *state.scan_done.lock().unwrap() = false;
     *state.cancel_flag.lock().unwrap() = false;
-    
+
     let progress = Progress::new();
     *state.progress.lock().unwrap() = Some(progress.clone());
 
@@ -683,45 +759,82 @@ async fn handle_smart_scan(
 
     let cache: Option<Arc<dyn Cache>> = if cfg.use_cache {
         let hash = cache_config_hash(&opts);
-        BoltCache::new("unused-removal", &hash).ok().map(|c| Arc::new(c) as Arc<dyn Cache>)
-    } else { None };
+        BoltCache::new("unused-removal", &hash)
+            .ok()
+            .map(|c| Arc::new(c) as Arc<dyn Cache>)
+    } else {
+        None
+    };
 
     let scanner = Scanner::new(opts, progress, cache);
     *state.scanner.lock().unwrap() = Some(scanner.clone());
-    
+
     let root = cfg.root.clone();
     let state_clone = state.clone();
     let cfg_clone = cfg.clone();
-    
+
     tokio::spawn(async move {
-        let root_for_walk = root.clone();
-        let recs_result = tokio::task::spawn_blocking(move || scanner.walk(&root_for_walk)).await;
-        
-        let (recs, errs) = match recs_result {
-            Ok(Ok((r, e))) => (r, e),
-            Ok(Err(e)) => {
-                error!("Scan error: {}", e);
-                (Vec::new(), vec![ScanError { path: root.clone(), error: e.to_string() }])
+        // Smart scan walks known junk zones (fast mode) for safe/balanced
+        // levels, or the full tree for aggressive / narrow custom targets.
+        let walk_roots = smart_scan_roots(&root, &cfg_clone.smart_junk_safety_level);
+        info!(
+            "Smart scan targets ({}): {:?}",
+            walk_roots.len(),
+            walk_roots
+        );
+
+        let recs_result = tokio::task::spawn_blocking(move || {
+            let mut all_recs: Vec<FileRecord> = Vec::new();
+            let mut all_errs: Vec<ScanError> = Vec::new();
+            for r in &walk_roots {
+                if scanner.is_stopped() {
+                    break;
+                }
+                match scanner.walk(r) {
+                    Ok((mut recs, errs)) => {
+                        all_recs.append(&mut recs);
+                        all_errs.extend(errs);
+                    }
+                    Err(e) => {
+                        error!("Scan error on {}: {}", r, e);
+                        all_errs.push(ScanError {
+                            path: r.clone(),
+                            error: e.to_string(),
+                        });
+                    }
+                }
             }
+            (all_recs, all_errs)
+        })
+        .await;
+
+        let (recs, errs) = match recs_result {
+            Ok((r, e)) => (r, e),
             Err(e) => {
                 error!("Scan task panicked: {}", e);
-                (Vec::new(), vec![ScanError { path: root, error: "Scan panicked".to_string() }])
+                (
+                    Vec::new(),
+                    vec![ScanError {
+                        path: root.clone(),
+                        error: "Scan panicked".to_string(),
+                    }],
+                )
             }
         };
 
         let engine = Engine::new(Arc::new(cfg_clone.clone()));
         let mut findings = engine.analyze(&recs);
-        
+
         if cfg_clone.check_duplicates {
             let dups = engine.find_duplicates(&recs);
             findings.extend(dups);
         }
-        
+
         findings.sort_by(|a, b| b.size.cmp(&a.size));
-        
+
         // Filter by safety level
         findings = filter_findings_by_safety(findings, &cfg_clone);
-        
+
         if let Some(p) = state_clone.progress.lock().unwrap().as_ref() {
             p.finish();
         }
@@ -730,15 +843,13 @@ async fn handle_smart_scan(
         *state_clone.findings.lock().unwrap() = findings;
         *state_clone.scan_done.lock().unwrap() = true;
     });
-    
+
     Json(serde_json::json!({ "scan_id": scan_id, "status": "started" }))
 }
 
-async fn handle_smart_categories(
-    State(state): State<ServerState>,
-) -> impl IntoResponse {
+async fn handle_smart_categories(State(state): State<ServerState>) -> impl IntoResponse {
     let findings = state.findings.lock().unwrap().clone();
-    
+
     if findings.is_empty() {
         return Json(SmartScanResponse {
             scan_id: 0,
@@ -746,20 +857,22 @@ async fn handle_smart_categories(
             categories: Vec::new(),
             total_reclaimable: 0,
             total_files: 0,
-        }).into_response();
+        })
+        .into_response();
     }
-    
+
     let categories = build_category_summaries(&findings);
     let total_reclaimable: u64 = categories.iter().map(|c| c.total_size).sum();
     let total_files: usize = categories.iter().map(|c| c.count).sum();
-    
+
     Json(SmartScanResponse {
         scan_id: *state.scan_id.lock().unwrap(),
         status: "completed".to_string(),
         categories,
         total_reclaimable,
         total_files,
-    }).into_response()
+    })
+    .into_response()
 }
 
 async fn handle_smart_clean(
@@ -767,33 +880,46 @@ async fn handle_smart_clean(
     Json(req): Json<SmartCleanRequest>,
 ) -> Response {
     if req.categories.is_empty() {
-        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": "no categories provided" }))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "no categories provided" })),
+        )
+            .into_response();
     }
-    
+
     let findings = state.findings.lock().unwrap().clone();
-    
+
     // Filter findings by requested categories
     let category_set: std::collections::HashSet<String> = req.categories.into_iter().collect();
-    let paths_to_delete: Vec<String> = findings.iter()
+    let paths_to_delete: Vec<String> = findings
+        .iter()
         .filter(|f| category_set.contains(&f.category.to_string()))
         .map(|f| f.path.clone())
         .collect();
-    
+
     if paths_to_delete.is_empty() {
-        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": "no matching files found" }))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "no matching files found" })),
+        )
+            .into_response();
     }
-    
+
     let result: Result<DeleteResult, anyhow::Error> = if req.mode == "hard" {
         hard_delete(&paths_to_delete)
     } else {
         recycle_bin(&paths_to_delete)
     };
-    
+
     match result {
         Ok(res) => {
             let deleted_set: std::collections::HashSet<_> = res.deleted.iter().cloned().collect();
-            state.findings.lock().unwrap().retain(|f| !deleted_set.contains(&f.path));
-            
+            state
+                .findings
+                .lock()
+                .unwrap()
+                .retain(|f| !deleted_set.contains(&f.path));
+
             let failed_count = res.failed.len();
             Json(SmartCleanResponse {
                 deleted: res.deleted.len(),
@@ -801,12 +927,85 @@ async fn handle_smart_clean(
                 total_bytes: res.total_bytes,
                 errors: res.failed,
                 success: failed_count == 0,
-            }).into_response()
+            })
+            .into_response()
         }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e.to_string() }))
-        ).into_response()
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+/// Known junk zones for the fast smart-scan mode.
+///
+/// Safe/Balanced levels scan only these well-known sources (that is what
+/// makes cleanup finish in seconds); Aggressive walks the full tree because
+/// stale/huge/duplicate detection needs complete coverage. A narrow custom
+/// target without standard zones falls back to a full walk of itself.
+fn smart_scan_roots(root: &str, safety: &crate::config::SafetyLevel) -> Vec<String> {
+    use crate::config::SafetyLevel as SL;
+
+    if *safety == SL::Aggressive {
+        return vec![root.to_string()];
+    }
+
+    let root_norm = root.trim_end_matches(['/', '\\']).to_string();
+    let is_filesystem_root = std::path::Path::new(root).parent().is_none();
+    let mut zones: Vec<String> = Vec::new();
+    let mut push = |p: String| {
+        if !zones.contains(&p) {
+            zones.push(p);
+        }
+    };
+
+    #[cfg(target_os = "macos")]
+    {
+        for rel in ["Downloads", "Library/Caches", "Library/Logs", ".Trash"] {
+            push(format!("{root_norm}/{rel}"));
+        }
+        if is_filesystem_root {
+            push("/private/var/folders".to_string());
+            push("/tmp".to_string());
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        for rel in [
+            r"Downloads",
+            r"AppData\Local\Temp",
+            r"AppData\Local\Google\Chrome\User Data\Default\Cache",
+            r"AppData\Local\Microsoft\Edge\User Data\Default\Cache",
+            r"AppData\Local\Mozilla\Firefox\Profiles",
+        ] {
+            push(format!("{root_norm}\\{rel}"));
+        }
+        if is_filesystem_root {
+            push(r"C:\$Recycle.Bin".to_string());
+        }
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        for rel in ["Downloads", ".cache", ".local/share/Trash"] {
+            push(format!("{root_norm}/{rel}"));
+        }
+        if is_filesystem_root {
+            push("/tmp".to_string());
+            push("/var/tmp".to_string());
+        }
+    }
+
+    // Drop zones that don't exist or equal the root itself
+    zones.retain(|z| {
+        let zn = z.trim_end_matches(['/', '\\']);
+        zn != root_norm && std::path::Path::new(z).exists()
+    });
+
+    if zones.is_empty() {
+        vec![root.to_string()]
+    } else {
+        zones
     }
 }
 
@@ -869,15 +1068,16 @@ fn filter_findings_by_safety(findings: Vec<Finding>, config: &Config) -> Vec<Fin
         ],
     };
 
-    findings.into_iter()
+    findings
+        .into_iter()
         .filter(|f| allowed_categories.contains(&f.category))
         .collect()
 }
 
 /// Build category summaries for smart scan response
 fn build_category_summaries(findings: &[Finding]) -> Vec<SmartCategorySummary> {
-    use std::collections::HashMap;
     use crate::rules::Category;
+    use std::collections::HashMap;
 
     let mut by_cat: HashMap<Category, Vec<&Finding>> = HashMap::new();
     for f in findings {
@@ -885,14 +1085,17 @@ fn build_category_summaries(findings: &[Finding]) -> Vec<SmartCategorySummary> {
     }
 
     let mut summaries = Vec::new();
-    
+
     for (category, items) in by_cat {
         let count = items.len();
         let total_size: u64 = items.iter().map(|f| f.size as u64).sum();
-        let risk = items.first().map(|f| f.risk).unwrap_or(crate::rules::Risk::Safe);
+        let risk = items
+            .first()
+            .map(|f| f.risk)
+            .unwrap_or(crate::rules::Risk::Safe);
         let description = get_category_description(category);
         let paths_sample = items.iter().take(5).map(|f| f.path.clone()).collect();
-        
+
         summaries.push(SmartCategorySummary {
             category,
             count,
@@ -902,7 +1105,7 @@ fn build_category_summaries(findings: &[Finding]) -> Vec<SmartCategorySummary> {
             paths_sample,
         });
     }
-    
+
     // Sort by total size descending
     summaries.sort_by(|a, b| b.total_size.cmp(&a.total_size));
     summaries
@@ -931,5 +1134,37 @@ fn get_category_description(category: crate::rules::Category) -> String {
         Category::AppLeftovers => "Possible leftover files from uninstalled apps".to_string(),
         Category::Huge => "Very large files".to_string(),
         Category::Large => "Large files".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod smart_scan_root_tests {
+    use super::smart_scan_roots;
+    use crate::config::SafetyLevel;
+
+    #[test]
+    fn balanced_custom_root_never_escapes_selected_folder() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("Downloads")).unwrap();
+        let root_text = root.path().to_string_lossy().into_owned();
+
+        let targets = smart_scan_roots(&root_text, &SafetyLevel::Balanced);
+
+        assert!(!targets.is_empty());
+        assert!(
+            targets.iter().all(|target| target.starts_with(&root_text)),
+            "{targets:?}"
+        );
+    }
+
+    #[test]
+    fn aggressive_scan_uses_the_complete_selected_tree() {
+        let root = tempfile::tempdir().unwrap();
+        let root_text = root.path().to_string_lossy().into_owned();
+
+        assert_eq!(
+            smart_scan_roots(&root_text, &SafetyLevel::Aggressive),
+            vec![root_text]
+        );
     }
 }

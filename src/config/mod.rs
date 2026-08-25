@@ -1,11 +1,11 @@
 //! Cross-platform configuration with platform-specific defaults
 
-use std::path::{Path, PathBuf};
-use std::env;
-use serde::{Deserialize, Serialize};
-use toml;
 use anyhow::Result;
 use dirs;
+use serde::{Deserialize, Serialize};
+use std::env;
+use std::path::{Path, PathBuf};
+use toml;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -90,15 +90,14 @@ impl Config {
                 workers: 0,
                 follow_links: false,
                 exclude_dirs: vec![
-                    r"$Recycle.Bin".to_string(),
                     r"System Volume Information".to_string(),
                     r"Windows\WinSxS".to_string(),
                     r"Windows\SoftwareDistribution".to_string(),
                     r"ProgramData\Microsoft\Windows Defender".to_string(),
                 ],
                 exclude_prefix: vec![],
-                large_bytes: 100 * 1024 * 1024,      // 100 MB
-                huge_bytes: 500 * 1024 * 1024,       // 500 MB
+                large_bytes: 100 * 1024 * 1024, // 100 MB
+                huge_bytes: 500 * 1024 * 1024,  // 500 MB
                 stale_days: 180,
                 old_log_days: 30,
                 stale_install_days: 90,
@@ -111,13 +110,12 @@ impl Config {
                     ".chk".to_string(),
                     "~$*".to_string(),
                 ],
+                // NOTE: browser cache dirs are handled by dedicated UserCache
+                // rules with higher precision — do not swallow them into Junk.
                 junk_dirs: vec![
                     "%TEMP%".to_string(),
                     r"C:\Windows\Temp".to_string(),
                     r"C:\Windows\Prefetch".to_string(),
-                    r"%LOCALAPPDATA%\Google\Chrome\User Data\Default\Cache".to_string(),
-                    r"%LOCALAPPDATA%\Microsoft\Edge\User Data\Default\Cache".to_string(),
-                    r"%LOCALAPPDATA%\Mozilla\Firefox\Profiles".to_string(),
                 ],
                 check_duplicates: false,
                 // Smart Junk
@@ -136,8 +134,8 @@ impl Config {
                 // Smart Junk Thresholds
                 old_download_days: 30,
                 unused_disk_image_days: 60,
-                large_hidden_bytes: 50 * 1024 * 1024,     // 50 MB
-                min_cache_size_bytes: 10 * 1024 * 1024,   // 10 MB
+                large_hidden_bytes: 50 * 1024 * 1024,   // 50 MB
+                min_cache_size_bytes: 10 * 1024 * 1024, // 10 MB
                 // Safety
                 protect_system: true,
                 allow_protected: false,
@@ -149,7 +147,7 @@ impl Config {
                 web_port: 0,
             }
         }
-        
+
         #[cfg(target_os = "macos")]
         {
             Self {
@@ -157,7 +155,6 @@ impl Config {
                 workers: 0,
                 follow_links: false,
                 exclude_dirs: vec![
-                    ".Trash".to_string(),
                     "/System".to_string(),
                     "/Library".to_string(),
                     "/private".to_string(),
@@ -165,8 +162,8 @@ impl Config {
                     "/Network".to_string(),
                 ],
                 exclude_prefix: vec![],
-                large_bytes: 100 * 1024 * 1024,      // 100 MB
-                huge_bytes: 500 * 1024 * 1024,       // 500 MB
+                large_bytes: 100 * 1024 * 1024, // 100 MB
+                huge_bytes: 500 * 1024 * 1024,  // 500 MB
                 stale_days: 180,
                 old_log_days: 30,
                 stale_install_days: 90,
@@ -179,13 +176,12 @@ impl Config {
                     ".chk".to_string(),
                     ".DS_Store".to_string(),
                 ],
+                // NOTE: ~/Library/{Caches,Logs} are classified by the dedicated
+                // UserCache/SystemLog rules — do not duplicate them as Junk dirs.
                 junk_dirs: vec![
-                    "$TMPDIR".to_string(),
                     "/tmp".to_string(),
                     "/private/tmp".to_string(),
                     "/var/folders".to_string(),
-                    "$HOME/Library/Caches".to_string(),
-                    "$HOME/Library/Logs".to_string(),
                 ],
                 check_duplicates: false,
                 // Smart Junk
@@ -204,8 +200,8 @@ impl Config {
                 // Smart Junk Thresholds
                 old_download_days: 30,
                 unused_disk_image_days: 60,
-                large_hidden_bytes: 50 * 1024 * 1024,     // 50 MB
-                min_cache_size_bytes: 10 * 1024 * 1024,   // 10 MB
+                large_hidden_bytes: 50 * 1024 * 1024,   // 50 MB
+                min_cache_size_bytes: 10 * 1024 * 1024, // 10 MB
                 // Safety
                 protect_system: true,
                 allow_protected: false,
@@ -217,7 +213,7 @@ impl Config {
                 web_port: 0,
             }
         }
-        
+
         #[cfg(all(unix, not(target_os = "macos")))]
         {
             Self {
@@ -269,8 +265,8 @@ impl Config {
                 // Smart Junk Thresholds
                 old_download_days: 30,
                 unused_disk_image_days: 60,
-                large_hidden_bytes: 50 * 1024 * 1024,     // 50 MB
-                min_cache_size_bytes: 10 * 1024 * 1024,   // 10 MB
+                large_hidden_bytes: 50 * 1024 * 1024,   // 50 MB
+                min_cache_size_bytes: 10 * 1024 * 1024, // 10 MB
                 // Safety
                 protect_system: true,
                 allow_protected: false,
@@ -353,19 +349,28 @@ impl Config {
         merge_field!(scan_mail_attachments, Self::default().scan_mail_attachments);
         merge_field!(scan_trash, Self::default().scan_trash);
         merge_field!(scan_old_downloads, Self::default().scan_old_downloads);
-        merge_field!(scan_unused_disk_images, Self::default().scan_unused_disk_images);
+        merge_field!(
+            scan_unused_disk_images,
+            Self::default().scan_unused_disk_images
+        );
         merge_field!(scan_dev_caches, Self::default().scan_dev_caches);
         merge_field!(scan_ide_caches, Self::default().scan_ide_caches);
         merge_field!(scan_large_hidden, Self::default().scan_large_hidden);
         // Smart Junk Thresholds
         merge_field!(old_download_days, Self::default().old_download_days);
-        merge_field!(unused_disk_image_days, Self::default().unused_disk_image_days);
+        merge_field!(
+            unused_disk_image_days,
+            Self::default().unused_disk_image_days
+        );
         merge_field!(large_hidden_bytes, Self::default().large_hidden_bytes);
         merge_field!(min_cache_size_bytes, Self::default().min_cache_size_bytes);
         // Safety
         merge_field!(protect_system, Self::default().protect_system);
         merge_field!(allow_protected, Self::default().allow_protected);
-        merge_field!(smart_junk_safety_level, Self::default().smart_junk_safety_level);
+        merge_field!(
+            smart_junk_safety_level,
+            Self::default().smart_junk_safety_level
+        );
         // Cache
         merge_field!(use_cache, Self::default().use_cache);
         merge_field!(cache_dir, Self::default().cache_dir);

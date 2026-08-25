@@ -1,12 +1,12 @@
 //! Classification rules engine for categorizing files
 
+use anyhow::Result;
+use blake3;
+use rayon::prelude::*;
+use std::fs::File;
+use std::io::{BufReader, Read};
 use std::path::Path;
 use std::sync::Arc;
-use rayon::prelude::*;
-use blake3;
-use std::io::{Read, BufReader};
-use std::fs::File;
-use anyhow::Result;
 
 use crate::config::Config;
 use crate::scanner_types::FileRecord;
@@ -122,7 +122,14 @@ where
 }
 
 impl Finding {
-    pub fn new(path: String, size: i64, category: Category, reason: String, risk: Risk, mod_time: std::time::SystemTime) -> Self {
+    pub fn new(
+        path: String,
+        size: i64,
+        category: Category,
+        reason: String,
+        risk: Risk,
+        mod_time: std::time::SystemTime,
+    ) -> Self {
         Self {
             path,
             size,
@@ -241,7 +248,8 @@ impl Engine {
     /// Analyze all records and return findings
     pub fn analyze(&self, records: &[FileRecord]) -> Vec<Finding> {
         // First pass: classify each file (parallel)
-        let findings: Vec<Option<Finding>> = records.par_iter()
+        let findings: Vec<Option<Finding>> = records
+            .par_iter()
             .filter(|r| !r.attrs.is_dir)
             .map(|rec| self.classify_single(rec))
             .collect();
@@ -249,7 +257,7 @@ impl Engine {
         // Flatten and deduplicate (first match wins based on priority)
         let mut seen = std::collections::HashSet::new();
         let mut results = Vec::new();
-        
+
         for f in findings.into_iter().flatten() {
             if seen.insert(f.path.clone()) {
                 results.push(f);
@@ -364,7 +372,9 @@ impl Engine {
         // 2) Junk directories
         for jd in &self.config.junk_dirs {
             let jd_lower = jd.to_lowercase();
-            if lower_path.starts_with(&format!("{}\\", jd_lower)) || lower_path.starts_with(&format!("{}/", jd_lower)) {
+            if lower_path.starts_with(&format!("{}\\", jd_lower))
+                || lower_path.starts_with(&format!("{}/", jd_lower))
+            {
                 return Some(Finding::new(
                     rec.path.clone(),
                     rec.size,
@@ -400,7 +410,10 @@ impl Engine {
                 rec.path.clone(),
                 rec.size,
                 Category::Huge,
-                format!("очень крупный файл (> {})", format_bytes(self.config.huge_bytes)),
+                format!(
+                    "очень крупный файл (> {})",
+                    format_bytes(self.config.huge_bytes)
+                ),
                 Risk::Caution,
                 rec.mod_time,
             ))
@@ -447,7 +460,9 @@ impl Engine {
         let lower_name = name.to_lowercase();
         let lower_path = rec.path.to_lowercase();
 
-        if (lower_name.ends_with(".msi") || lower_name.ends_with(".exe") || lower_name.ends_with(".msu"))
+        if (lower_name.ends_with(".msi")
+            || lower_name.ends_with(".exe")
+            || lower_name.ends_with(".msu"))
             && lower_path.contains(r"\downloads\")
             && rec.mod_time < self.config.stale_install_cutoff().into()
         {
@@ -455,7 +470,10 @@ impl Engine {
                 rec.path.clone(),
                 rec.size,
                 Category::StaleInstall,
-                format!("старый инсталлятор в Downloads (> {} дней)", self.config.stale_install_days),
+                format!(
+                    "старый инсталлятор в Downloads (> {} дней)",
+                    self.config.stale_install_days
+                ),
                 Risk::Caution,
                 rec.mod_time,
             ))
@@ -463,7 +481,6 @@ impl Engine {
             None
         }
     }
-
 
     fn check_app_leftovers(&self, rec: &FileRecord) -> Option<Finding> {
         let lower_path = rec.path.to_lowercase();
@@ -516,19 +533,25 @@ impl Engine {
 
                     for pattern in &leftover_patterns {
                         if lower_path.contains(pattern) || lower_name.contains(pattern) {
-                            return Some(Finding::new(
-                                rec.path.clone(),
-                                rec.size,
-                                Category::AppLeftovers,
-                                format!("следы удалённого приложения ({})", pattern),
-                                Risk::Safe,
-                                rec.mod_time,
-                            ).with_extra({
-                                let mut extra = std::collections::HashMap::new();
-                                extra.insert("detection_type".to_string(), "app_leftover".to_string());
-                                extra.insert("pattern".to_string(), pattern.to_string());
-                                extra
-                            }));
+                            return Some(
+                                Finding::new(
+                                    rec.path.clone(),
+                                    rec.size,
+                                    Category::AppLeftovers,
+                                    format!("следы удалённого приложения ({})", pattern),
+                                    Risk::Safe,
+                                    rec.mod_time,
+                                )
+                                .with_extra({
+                                    let mut extra = std::collections::HashMap::new();
+                                    extra.insert(
+                                        "detection_type".to_string(),
+                                        "app_leftover".to_string(),
+                                    );
+                                    extra.insert("pattern".to_string(), pattern.to_string());
+                                    extra
+                                }),
+                            );
                         }
                     }
                 }
@@ -603,7 +626,10 @@ impl Engine {
                     rec.path.clone(),
                     rec.size,
                     Category::UserCache,
-                    format!("браузерный кэш ({})", pattern.split('/').nth(1).unwrap_or("browser")),
+                    format!(
+                        "браузерный кэш ({})",
+                        pattern.split('/').nth(1).unwrap_or("browser")
+                    ),
                     Risk::Safe,
                     rec.mod_time,
                 ));
@@ -618,7 +644,6 @@ impl Engine {
                 "/library/caches/com.apple.",
                 "/private/var/folders/",
                 "/var/folders/",
-                "/users/*/library/caches/",
             ];
             for dir in MACOS_CACHE_DIRS {
                 if lower_path.contains(dir) {
@@ -701,11 +726,15 @@ impl Engine {
         let lower_name = name.to_lowercase();
 
         // Log file extensions
-        if (lower_name.ends_with(".log") || lower_name.ends_with(".log.old") || lower_name.contains(".log."))
+        if (lower_name.ends_with(".log")
+            || lower_name.ends_with(".log.old")
+            || lower_name.contains(".log."))
             && rec.mod_time < self.config.old_log_cutoff().into()
         {
             // Exclude active application logs
-            if lower_path.contains("/library/logs/") || lower_path.contains("appdata/local/") && lower_path.contains("log") {
+            if lower_path.contains("/library/logs/")
+                || lower_path.contains("appdata/local/") && lower_path.contains("log")
+            {
                 return Some(Finding::new(
                     rec.path.clone(),
                     rec.size,
@@ -827,14 +856,18 @@ impl Engine {
         let cutoff = chrono::Utc::now() - chrono::Duration::days(self.config.old_download_days);
 
         // Check if in Downloads folder
-        let in_downloads = lower_path.contains("/downloads/") || lower_path.contains("\\downloads\\");
+        let in_downloads =
+            lower_path.contains("/downloads/") || lower_path.contains("\\downloads\\");
 
         if in_downloads && rec.mod_time < cutoff.into() {
             return Some(Finding::new(
                 rec.path.clone(),
                 rec.size,
                 Category::OldDownload,
-                format!("старый файл в Downloads (> {} дней)", self.config.old_download_days),
+                format!(
+                    "старый файл в Downloads (> {} дней)",
+                    self.config.old_download_days
+                ),
                 Risk::Safe,
                 rec.mod_time,
             ));
@@ -897,7 +930,13 @@ impl Engine {
             .unwrap_or("")
             .to_lowercase();
 
-        if name == "target" || name == "node_modules" || name == "dist" || name == "build" || name == ".next" || name == ".output" {
+        if name == "target"
+            || name == "node_modules"
+            || name == "dist"
+            || name == "build"
+            || name == ".next"
+            || name == ".output"
+        {
             // Only classify if it's a directory marker (we don't scan dirs, but parent paths)
             // This would need directory context - skip for files
         }
@@ -1055,7 +1094,11 @@ impl Engine {
                 "appdata/local/packages/microsoft.windowscommunicationsapps/",
             ];
             for dir in MAIL_DIRS {
-                if lower_path.contains(dir) && (lower_name.contains("attachment") || lower_name.ends_with(".eml") || lower_name.ends_with(".msg")) {
+                if lower_path.contains(dir)
+                    && (lower_name.contains("attachment")
+                        || lower_name.ends_with(".eml")
+                        || lower_name.ends_with(".msg"))
+                {
                     return Some(Finding::new(
                         rec.path.clone(),
                         rec.size,
@@ -1077,12 +1120,15 @@ impl Engine {
             return None;
         }
         let lower_path = rec.path.to_lowercase();
-        let cutoff = chrono::Utc::now() - chrono::Duration::days(self.config.stale_install_days * 2); // Use longer period for backups
+        let cutoff =
+            chrono::Utc::now() - chrono::Duration::days(self.config.stale_install_days * 2); // Use longer period for backups
 
         // iOS backups
         #[cfg(target_os = "macos")]
         {
-            if lower_path.contains("/library/application support/mobilesync/backup/") && rec.mod_time < cutoff.into() {
+            if lower_path.contains("/library/application support/mobilesync/backup/")
+                && rec.mod_time < cutoff.into()
+            {
                 return Some(Finding::new(
                     rec.path.clone(),
                     rec.size,
@@ -1092,7 +1138,10 @@ impl Engine {
                     rec.mod_time,
                 ));
             }
-            if lower_path.contains("/library/application support/mobilesync/") && lower_path.ends_with(".mddata") && rec.mod_time < cutoff.into() {
+            if lower_path.contains("/library/application support/mobilesync/")
+                && lower_path.ends_with(".mddata")
+                && rec.mod_time < cutoff.into()
+            {
                 return Some(Finding::new(
                     rec.path.clone(),
                     rec.size,
@@ -1106,7 +1155,9 @@ impl Engine {
 
         #[cfg(target_os = "windows")]
         {
-            if lower_path.contains("appdata/roaming/apple computer/mobilesync/backup/") && rec.mod_time < cutoff.into() {
+            if lower_path.contains("appdata/roaming/apple computer/mobilesync/backup/")
+                && rec.mod_time < cutoff.into()
+            {
                 return Some(Finding::new(
                     rec.path.clone(),
                     rec.size,
@@ -1116,7 +1167,9 @@ impl Engine {
                     rec.mod_time,
                 ));
             }
-            if lower_path.contains("appdata/local/microsoft/windows/backup/") && rec.mod_time < cutoff.into() {
+            if lower_path.contains("appdata/local/microsoft/windows/backup/")
+                && rec.mod_time < cutoff.into()
+            {
                 return Some(Finding::new(
                     rec.path.clone(),
                     rec.size,
@@ -1158,14 +1211,18 @@ impl Engine {
             .and_then(|s| s.to_str())
             .unwrap_or("");
         let lower_name = name.to_lowercase();
-        let cutoff = chrono::Utc::now() - chrono::Duration::days(self.config.unused_disk_image_days);
+        let cutoff =
+            chrono::Utc::now() - chrono::Duration::days(self.config.unused_disk_image_days);
 
         const DISK_IMAGE_EXTS: &[&str] = &[
             ".dmg", ".iso", ".img", ".vhd", ".vhdx", ".vmdk", ".qcow2", ".toast", ".cdr",
         ];
 
         for ext in DISK_IMAGE_EXTS {
-            if lower_name.ends_with(ext) && rec.mod_time < cutoff.into() && rec.size >= self.config.large_hidden_bytes as i64 {
+            if lower_name.ends_with(ext)
+                && rec.mod_time < cutoff.into()
+                && rec.size >= self.config.large_hidden_bytes as i64
+            {
                 return Some(Finding::new(
                     rec.path.clone(),
                     rec.size,
@@ -1266,7 +1323,10 @@ impl Engine {
                 rec.path.clone(),
                 rec.size,
                 Category::LargeHidden,
-                format!("большой скрытый файл (> {})", format_bytes(self.config.large_hidden_bytes)),
+                format!(
+                    "большой скрытый файл (> {})",
+                    format_bytes(self.config.large_hidden_bytes)
+                ),
                 Risk::Caution,
                 rec.mod_time,
             ));
@@ -1277,7 +1337,8 @@ impl Engine {
 
     /// Filter out protected paths
     pub fn filter_protected(&self, findings: Vec<Finding>) -> Vec<Finding> {
-        findings.into_iter()
+        findings
+            .into_iter()
             .filter(|f| !is_protected(&f.path))
             .collect()
     }
@@ -1289,7 +1350,8 @@ impl Engine {
         }
 
         // Group by size first
-        let mut by_size: std::collections::HashMap<u64, Vec<&FileRecord>> = std::collections::HashMap::new();
+        let mut by_size: std::collections::HashMap<u64, Vec<&FileRecord>> =
+            std::collections::HashMap::new();
         for rec in records {
             if rec.attrs.is_dir {
                 continue;
@@ -1314,14 +1376,14 @@ impl Engine {
 
         // Parallel hashing
         type Hashed = (FileRecord, String);
-        let results: Vec<Hashed> = candidates.par_iter()
-            .filter_map(|rec| {
-                hash_file(&rec.path).ok().map(|h| ((*rec).clone(), h))
-            })
+        let results: Vec<Hashed> = candidates
+            .par_iter()
+            .filter_map(|rec| hash_file(&rec.path).ok().map(|h| ((*rec).clone(), h)))
             .collect();
 
         // Group by hash
-        let mut by_hash: std::collections::HashMap<String, Vec<Hashed>> = std::collections::HashMap::new();
+        let mut by_hash: std::collections::HashMap<String, Vec<Hashed>> =
+            std::collections::HashMap::new();
         for (rec, hash) in results {
             by_hash.entry(hash.clone()).or_default().push((rec, hash));
         }
@@ -1336,14 +1398,23 @@ impl Engine {
             for (dup, _) in &group[1..] {
                 let mut extra = std::collections::HashMap::new();
                 extra.insert("original".to_string(), first.path.clone());
-                findings.push(Finding::new(
-                    dup.path.clone(),
-                    dup.size,
-                    Category::Duplicate,
-                    format!("дубликат файла {}", Path::new(&first.path).file_name().and_then(|s| s.to_str()).unwrap_or("")),
-                    Risk::Caution,
-                    dup.mod_time,
-                ).with_extra(extra));
+                findings.push(
+                    Finding::new(
+                        dup.path.clone(),
+                        dup.size,
+                        Category::Duplicate,
+                        format!(
+                            "дубликат файла {}",
+                            Path::new(&first.path)
+                                .file_name()
+                                .and_then(|s| s.to_str())
+                                .unwrap_or("")
+                        ),
+                        Risk::Caution,
+                        dup.mod_time,
+                    )
+                    .with_extra(extra),
+                );
             }
         }
 
