@@ -231,8 +231,26 @@ const PROTECTED_PATHS: &[&str] = &[
 ];
 
 pub fn is_protected(path: &str) -> bool {
-    let lower = path.to_lowercase();
-    PROTECTED_PATHS.iter().any(|p| lower.starts_with(p))
+    let lower = normalize_path(path);
+    PROTECTED_PATHS.iter().any(|pattern| {
+        let pattern = normalize_path(pattern);
+        if let Some((prefix, suffix)) = pattern.split_once('*') {
+            lower.starts_with(prefix) && lower[prefix.len()..].contains(suffix)
+        } else {
+            lower.starts_with(&pattern)
+        }
+    })
+}
+
+/// Normalize paths before applying cross-platform rules. Win32 returns `\\` separators while
+/// most rule tables intentionally use `/`; without this conversion almost every Windows cache,
+/// log, IDE and development-artifact rule silently misses real files.
+fn normalize_path(path: &str) -> String {
+    let mut normalized = path.to_lowercase().replace('\\', "/");
+    if let Some(rest) = normalized.strip_prefix("//?/") {
+        normalized = rest.to_string();
+    }
+    normalized
 }
 
 /// Rules engine for classifying files
@@ -264,9 +282,29 @@ impl Engine {
             }
         }
 
-        // Filter protected paths
-        if !self.config.allow_protected {
-            results = self.filter_protected(results);
+        // Protected large files are still valuable disk-usage information. Keep them visible as
+        // read-only findings, while continuing to hide every protected cleanup suggestion.
+        if self.config.protect_system && !self.config.allow_protected {
+            results = results
+                .into_iter()
+                .filter_map(|mut finding| {
+                    if !is_protected(&finding.path) {
+                        return Some(finding);
+                    }
+                    if matches!(
+                        finding.category,
+                        Category::Large | Category::Huge | Category::LargeHidden
+                    ) {
+                        finding.risk = Risk::Protected;
+                        finding
+                            .reason
+                            .push_str("; защищённый системный путь — только просмотр");
+                        Some(finding)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
         }
 
         results
@@ -274,7 +312,14 @@ impl Engine {
 
     /// Classify a single file record - returns first matching rule (priority order)
     fn classify_single(&self, rec: &FileRecord) -> Option<Finding> {
-        // Priority order: Junk > Smart Junk (high confidence) > Stale > Huge/Large > OldLog > StaleInstall > AppLeftovers > Smart Junk (lower confidence)
+        // Size is always surfaced first. Otherwise a 20 GiB cache, old download, backup or stale
+        // file is swallowed by an earlier category and disappears from the Large/Huge views.
+        // Large files are informational/caution findings and are never bulk-cleaned automatically.
+        if let Some(f) = self.check_large(rec) {
+            return Some(f);
+        }
+        // Remaining priority: Junk > Smart Junk (high confidence) > Stale > OldLog >
+        // StaleInstall > AppLeftovers > Smart Junk (lower confidence).
         if let Some(f) = self.check_junk(rec) {
             return Some(f);
         }
@@ -301,9 +346,6 @@ impl Engine {
             return Some(f);
         }
         if let Some(f) = self.check_stale(rec) {
-            return Some(f);
-        }
-        if let Some(f) = self.check_large(rec) {
             return Some(f);
         }
         if let Some(f) = self.check_old_log(rec) {
@@ -340,7 +382,7 @@ impl Engine {
             .and_then(|s| s.to_str())
             .unwrap_or("");
         let lower_name = name.to_lowercase();
-        let lower_path = rec.path.to_lowercase();
+        let lower_path = normalize_path(&rec.path);
 
         // 1) Junk extensions
         for ext in &self.config.junk_extensions {
@@ -371,10 +413,8 @@ impl Engine {
 
         // 2) Junk directories
         for jd in &self.config.junk_dirs {
-            let jd_lower = jd.to_lowercase();
-            if lower_path.starts_with(&format!("{}\\", jd_lower))
-                || lower_path.starts_with(&format!("{}/", jd_lower))
-            {
+            let jd_lower = normalize_path(jd).trim_end_matches('/').to_string();
+            if lower_path == jd_lower || lower_path.starts_with(&format!("{}/", jd_lower)) {
                 return Some(Finding::new(
                     rec.path.clone(),
                     rec.size,
@@ -458,12 +498,12 @@ impl Engine {
             .and_then(|s| s.to_str())
             .unwrap_or("");
         let lower_name = name.to_lowercase();
-        let lower_path = rec.path.to_lowercase();
+        let lower_path = normalize_path(&rec.path);
 
         if (lower_name.ends_with(".msi")
             || lower_name.ends_with(".exe")
             || lower_name.ends_with(".msu"))
-            && lower_path.contains(r"\downloads\")
+            && lower_path.contains("/downloads/")
             && rec.mod_time < self.config.stale_install_cutoff().into()
         {
             Some(Finding::new(
@@ -483,7 +523,7 @@ impl Engine {
     }
 
     fn check_app_leftovers(&self, rec: &FileRecord) -> Option<Finding> {
-        let lower_path = rec.path.to_lowercase();
+        let lower_path = normalize_path(&rec.path);
         let name = Path::new(&rec.path)
             .file_name()
             .and_then(|s| s.to_str())
@@ -595,7 +635,7 @@ impl Engine {
         if !self.config.scan_user_caches {
             return None;
         }
-        let lower_path = rec.path.to_lowercase();
+        let lower_path = normalize_path(&rec.path);
         let _name = Path::new(&rec.path)
             .file_name()
             .and_then(|s| s.to_str())
@@ -718,7 +758,7 @@ impl Engine {
         if !self.config.scan_system_logs {
             return None;
         }
-        let lower_path = rec.path.to_lowercase();
+        let lower_path = normalize_path(&rec.path);
         let name = Path::new(&rec.path)
             .file_name()
             .and_then(|s| s.to_str())
@@ -800,7 +840,7 @@ impl Engine {
         if !self.config.scan_trash {
             return None;
         }
-        let lower_path = rec.path.to_lowercase();
+        let lower_path = normalize_path(&rec.path);
 
         #[cfg(target_os = "macos")]
         {
@@ -852,12 +892,11 @@ impl Engine {
         if !self.config.scan_old_downloads {
             return None;
         }
-        let lower_path = rec.path.to_lowercase();
+        let lower_path = normalize_path(&rec.path);
         let cutoff = chrono::Utc::now() - chrono::Duration::days(self.config.old_download_days);
 
         // Check if in Downloads folder
-        let in_downloads =
-            lower_path.contains("/downloads/") || lower_path.contains("\\downloads\\");
+        let in_downloads = lower_path.contains("/downloads/");
 
         if in_downloads && rec.mod_time < cutoff.into() {
             return Some(Finding::new(
@@ -881,7 +920,7 @@ impl Engine {
         if !self.config.scan_dev_caches {
             return None;
         }
-        let lower_path = rec.path.to_lowercase();
+        let lower_path = normalize_path(&rec.path);
 
         const DEV_CACHE_PATTERNS: &[(&str, &str)] = &[
             ("/.cargo/registry/cache/", "Cargo registry cache"),
@@ -951,7 +990,7 @@ impl Engine {
             if !self.config.scan_ide_caches {
                 return None;
             }
-            let lower_path = rec.path.to_lowercase();
+            let lower_path = normalize_path(&rec.path);
 
             const XCODE_CACHE_DIRS: &[&str] = &[
                 "/library/developer/xcode/deriveddata/",
@@ -985,7 +1024,7 @@ impl Engine {
         if !self.config.scan_ide_caches {
             return None;
         }
-        let lower_path = rec.path.to_lowercase();
+        let lower_path = normalize_path(&rec.path);
 
         const VSCODE_CACHE_DIRS: &[&str] = &[
             // VS Code
@@ -1056,7 +1095,7 @@ impl Engine {
         if !self.config.scan_mail_attachments {
             return None;
         }
-        let lower_path = rec.path.to_lowercase();
+        let lower_path = normalize_path(&rec.path);
         let name = Path::new(&rec.path)
             .file_name()
             .and_then(|s| s.to_str())
@@ -1119,7 +1158,7 @@ impl Engine {
         if !self.config.scan_old_backups {
             return None;
         }
-        let lower_path = rec.path.to_lowercase();
+        let lower_path = normalize_path(&rec.path);
         let cutoff =
             chrono::Utc::now() - chrono::Duration::days(self.config.stale_install_days * 2); // Use longer period for backups
 
@@ -1242,7 +1281,7 @@ impl Engine {
         if !self.config.scan_language_files {
             return None;
         }
-        let lower_path = rec.path.to_lowercase();
+        let lower_path = normalize_path(&rec.path);
 
         // macOS .lproj bundles
         #[cfg(target_os = "macos")]
@@ -1270,7 +1309,7 @@ impl Engine {
         // Windows MUI files
         #[cfg(target_os = "windows")]
         {
-            if lower_path.contains("\\mui\\") || lower_path.ends_with(".mui") {
+            if lower_path.contains("/mui/") || lower_path.ends_with(".mui") {
                 return Some(Finding::new(
                     rec.path.clone(),
                     rec.size,
@@ -1335,16 +1374,20 @@ impl Engine {
         None
     }
 
-    /// Filter out protected paths
-    pub fn filter_protected(&self, findings: Vec<Finding>) -> Vec<Finding> {
-        findings
-            .into_iter()
-            .filter(|f| !is_protected(&f.path))
-            .collect()
-    }
-
     /// Find duplicate files using parallel Blake3 hashing
     pub fn find_duplicates(&self, records: &[FileRecord]) -> Vec<Finding> {
+        self.find_duplicates_with_progress(records, |_, _| {})
+    }
+
+    /// Find duplicate files and report hashing progress as `(completed, total)`.
+    pub fn find_duplicates_with_progress<F>(
+        &self,
+        records: &[FileRecord],
+        on_progress: F,
+    ) -> Vec<Finding>
+    where
+        F: Fn(usize, usize) + Sync,
+    {
         if !self.config.check_duplicates {
             return Vec::new();
         }
@@ -1374,11 +1417,23 @@ impl Engine {
             return Vec::new();
         }
 
+        let total_candidates = candidates.len();
+        let completed = std::sync::atomic::AtomicUsize::new(0);
+        let report_every = (total_candidates / 200).max(1);
+        on_progress(0, total_candidates);
+
         // Parallel hashing
         type Hashed = (FileRecord, String);
         let results: Vec<Hashed> = candidates
             .par_iter()
-            .filter_map(|rec| hash_file(&rec.path).ok().map(|h| ((*rec).clone(), h)))
+            .filter_map(|rec| {
+                let result = hash_file(&rec.path).ok().map(|h| ((*rec).clone(), h));
+                let done = completed.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                if done == total_candidates || done % report_every == 0 {
+                    on_progress(done, total_candidates);
+                }
+                result
+            })
             .collect();
 
         // Group by hash
@@ -1486,5 +1541,92 @@ mod tests {
         assert_eq!(format_bytes(1024), "1 KiB");
         assert_eq!(format_bytes(1024 * 1024), "1 MiB");
         assert_eq!(format_bytes(1024 * 1024 * 1024), "1 GiB");
+    }
+
+    #[test]
+    fn windows_separators_match_cross_platform_rule_tables() {
+        assert_eq!(
+            normalize_path(r"C:\Users\Alice\AppData\Local\Temp\cache.bin"),
+            "c:/users/alice/appdata/local/temp/cache.bin"
+        );
+    }
+
+    #[test]
+    fn large_files_take_priority_over_other_cleanup_categories() {
+        let mut config = Config::default();
+        config.large_bytes = 100;
+        config.huge_bytes = 1_000;
+        config.allow_protected = true;
+        let engine = Engine::new(Arc::new(config));
+        let record = FileRecord {
+            path: r"C:\Users\Alice\Downloads\old.tmp".to_string(),
+            size: 500,
+            mod_time: std::time::UNIX_EPOCH,
+            attrs: crate::scanner_types::Attrs {
+                is_dir: false,
+                is_reparse: false,
+                is_hidden: false,
+                is_system: false,
+            },
+        };
+
+        let findings = engine.analyze(&[record]);
+
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].category, Category::Large);
+        assert_eq!(findings[0].risk, Risk::Caution);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_cache_rules_accept_native_backslashes() {
+        let mut config = Config::default();
+        config.large_bytes = u64::MAX;
+        config.huge_bytes = u64::MAX;
+        let engine = Engine::new(Arc::new(config));
+        let record = FileRecord {
+            path: r"C:\Users\Alice\AppData\Local\Google\Chrome\User Data\Default\Cache\data.bin"
+                .to_string(),
+            size: 1024,
+            mod_time: std::time::SystemTime::now(),
+            attrs: crate::scanner_types::Attrs {
+                is_dir: false,
+                is_reparse: false,
+                is_hidden: false,
+                is_system: false,
+            },
+        };
+
+        let findings = engine.analyze(&[record]);
+
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].category, Category::UserCache);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn protected_large_windows_files_remain_visible_but_read_only() {
+        let mut config = Config::default();
+        config.large_bytes = 100;
+        config.huge_bytes = 1_000;
+        config.allow_protected = false;
+        let engine = Engine::new(Arc::new(config));
+        let record = FileRecord {
+            path: r"C:\Windows\System32\large.bin".to_string(),
+            size: 2_000,
+            mod_time: std::time::SystemTime::now(),
+            attrs: crate::scanner_types::Attrs {
+                is_dir: false,
+                is_reparse: false,
+                is_hidden: false,
+                is_system: true,
+            },
+        };
+
+        let findings = engine.analyze(&[record]);
+
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].category, Category::Huge);
+        assert_eq!(findings[0].risk, Risk::Protected);
     }
 }

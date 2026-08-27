@@ -1,4 +1,4 @@
-// unused-removal Web UI - Main Application
+// unused-removal Desktop UI - Main Application
 // This file is embedded and served by the Rust binary
 
 // ===== Types =====
@@ -96,8 +96,8 @@ const SAFETY_DESCRIPTIONS = {
 
 // Categories allowed per safety level
 const SAFETY_CATEGORIES = {
-  safe: ['junk', 'user_cache', 'system_log', 'trash', 'old_download', 'dev_cache', 'xcode_cache', 'vscode_cache', 'old_log', 'stale_install'],
-  balanced: ['junk', 'user_cache', 'system_log', 'trash', 'old_download', 'dev_cache', 'xcode_cache', 'vscode_cache', 'old_log', 'stale_install', 'language_file', 'old_backup', 'mail_attachment'],
+  safe: ['junk', 'user_cache', 'system_log', 'trash', 'old_download', 'dev_cache', 'xcode_cache', 'vscode_cache', 'old_log', 'stale_install', 'huge', 'large'],
+  balanced: ['junk', 'user_cache', 'system_log', 'trash', 'old_download', 'dev_cache', 'xcode_cache', 'vscode_cache', 'old_log', 'stale_install', 'language_file', 'old_backup', 'mail_attachment', 'huge', 'large'],
   aggressive: ['junk', 'user_cache', 'system_log', 'trash', 'old_download', 'dev_cache', 'xcode_cache', 'vscode_cache', 'old_log', 'stale_install', 'language_file', 'old_backup', 'mail_attachment', 'unused_disk_image', 'large_hidden', 'stale', 'duplicate', 'app_leftovers', 'huge', 'large']
 };
 
@@ -824,7 +824,7 @@ async function startScan() {
   } catch (e) {
     const msg = e && e.message ? e.message : String(e);
     const hint = msg.includes('Failed to fetch')
-      ? 'Сервер недоступен. Запустите: unused-removal serve'
+      ? 'Внутренний модуль приложения недоступен. Перезапустите приложение.'
       : msg;
     showToast('Ошибка запуска: ' + hint, 'error');
     setPhase('config');
@@ -855,7 +855,7 @@ function pollProgress() {
   if (state.phase !== 'scanning') return;
   api.getProgress().then(data => {
     if (state.phase !== 'scanning') return;
-    updateProgress(data.progress);
+    updateProgress(data.progress, data.done);
     if (!data.done) progressPollTimer = setTimeout(pollProgress, 500);
     else loadResults();
   }).catch(e => {
@@ -867,7 +867,7 @@ function pollProgress() {
 
 let lastRecentPaths = new Set();
 
-function updateProgress(p) {
+function updateProgress(p, done = false) {
   els.statFiles.textContent = formatNumber(p.files);
   els.statDirs.textContent = formatNumber(p.dirs);
   els.statBytes.textContent = formatBytes(p.bytes);
@@ -882,11 +882,12 @@ function updateProgress(p) {
   if (ring) {
     const CIRC = 2 * Math.PI * 49;
     ring.style.strokeDasharray = String(CIRC);
-    if (p.finished) { ring.style.strokeDashoffset = '0'; els.progressPercent.textContent = '100'; }
+    if (done) { ring.style.strokeDashoffset = '0'; els.progressPercent.textContent = '100'; }
     else if (p.percent >= 0) {
-      const frac = clamp(p.percent, 0, 100) / 100;
+      const visiblePercent = clamp(p.percent, 0, 99);
+      const frac = visiblePercent / 100;
       ring.style.strokeDashoffset = String(CIRC * (1 - frac));
-      els.progressPercent.textContent = String(Math.round(p.percent));
+      els.progressPercent.textContent = `${p.estimated ? '≈' : ''}${Math.round(visiblePercent)}`;
     } else { ring.style.strokeDashoffset = String(CIRC); els.progressPercent.textContent = '…'; }
   }
 
@@ -1014,7 +1015,7 @@ async function startSmartScan() {
   } catch (e) {
     const msg = e && e.message ? e.message : String(e);
     const hint = msg.includes('Failed to fetch')
-      ? 'Сервер недоступен. Запустите: unused-removal serve'
+      ? 'Внутренний модуль приложения недоступен. Перезапустите приложение.'
       : msg;
     showToast('Ошибка запуска: ' + hint, 'error');
     setPhase('smart-scan');
@@ -1027,7 +1028,7 @@ function pollSmartProgress() {
   if (!els.smartProgressSection || els.smartProgressSection.classList.contains('hidden')) return;
   api.getProgress().then(data => {
     if (!els.smartProgressSection || els.smartProgressSection.classList.contains('hidden')) return;
-    updateSmartProgress(data.progress);
+    updateSmartProgress(data.progress, data.done);
     if (!data.done) smartProgressPollTimer = setTimeout(pollSmartProgress, 500);
     else loadSmartResults();
   }).catch(e => {
@@ -1037,15 +1038,12 @@ function pollSmartProgress() {
   });
 }
 
-function updateSmartProgress(p) {
-  // Phase 1 of the walker indexes the whole tree before per-file stats
-  // start moving — say so explicitly instead of showing a frozen zero.
-  if (!p.finished && p.files === 0) {
-    // Phase 1 of the walker: directories are being indexed, file stats follow
-    els.smartProgressDesc.textContent = 'Индексация файловой системы…';
-  } else {
-    els.smartProgressDesc.textContent = p.finished ? 'Завершение…' : (p.current || 'Сканирование…');
-  }
+function updateSmartProgress(p, done = false) {
+  // The active disk and post-scan analysis stage come from the backend. "100" is reserved for
+  // a response whose results are actually ready, never merely for a finished filesystem walk.
+  els.smartProgressDesc.textContent = done
+    ? 'Завершено'
+    : (p.current || (p.files === 0 ? 'Индексация файловой системы…' : 'Сканирование…'));
 
   if (els.smartProgressDirs) els.smartProgressDirs.textContent = formatNumber(p.dirs || 0);
   if (els.smartProgressFiles) els.smartProgressFiles.textContent = formatNumber(p.files);
@@ -1059,14 +1057,15 @@ function updateSmartProgress(p) {
   if (ring) {
     const CIRC = 2 * Math.PI * 49;
     ring.style.strokeDasharray = String(CIRC);
-    if (p.finished) { 
+    if (done) { 
       ring.style.strokeDashoffset = '0'; 
       els.smartProgressPercent.textContent = '100'; 
     }
     else if (p.percent >= 0) {
-      const frac = clamp(p.percent, 0, 100) / 100;
+      const visiblePercent = clamp(p.percent, 0, 99);
+      const frac = visiblePercent / 100;
       ring.style.strokeDashoffset = String(CIRC * (1 - frac));
-      els.smartProgressPercent.textContent = String(Math.round(p.percent));
+      els.smartProgressPercent.textContent = `${p.estimated ? '≈' : ''}${Math.round(visiblePercent)}`;
     } else { 
       ring.style.strokeDashoffset = String(CIRC); 
       els.smartProgressPercent.textContent = '…'; 
@@ -1079,7 +1078,11 @@ async function loadSmartResults() {
     const res = await api.getSmartCategories();
     state.smartScanCategories = res.categories;
     state.smartTotalReclaimable = res.total_reclaimable;
-    state.smartSelectedCategories = new Set(res.categories.map(c => c.category));
+    // Only high-confidence safe categories are preselected for bulk cleanup. Large, caution and
+    // protected files are findings for human review, never an implicit cleanup decision.
+    state.smartSelectedCategories = new Set(
+      res.categories.filter(c => c.risk === Risk.SAFE).map(c => c.category)
+    );
     lastRecentPaths.clear();
 
     // Hide the stop control — scan is finished
@@ -1109,7 +1112,7 @@ async function loadSmartResults() {
     els.smartSummaryTotal.textContent = formatNumber(res.total_files);
     animateValue(els.smartSummarySize, res.total_reclaimable, formatBytes);
 
-    // All categories are preselected for a fresh scan — enable the clean button
+    // Safe categories are preselected; review-only categories never enable bulk cleanup.
     if (els.btnSmartCleanAll) els.btnSmartCleanAll.disabled = state.smartSelectedCategories.size === 0;
 
     // Update donut chart text
@@ -1153,6 +1156,7 @@ function renderCategoryCards() {
   container.innerHTML = state.smartScanCategories.map((cat, i) => {
     const isAllowed = allowedCategories.includes(cat.category);
     const isSelected = state.smartSelectedCategories.has(cat.category);
+    const isBulkCleanable = isAllowed && cat.risk === Risk.SAFE;
     const icon = iconSvg(cat.category, 18);
     const description = CATEGORY_DESCRIPTIONS[cat.category] || cat.description;
     const riskClass = cat.risk === 'safe' ? 'safe' : cat.risk === 'caution' ? 'caution' : 'protected';
@@ -1170,8 +1174,8 @@ function renderCategoryCards() {
   <div class="category-stats">
     <span class="category-size">${formatBytes(cat.total_size)}</span>
     <label class="category-checkbox">
-      <input type="checkbox" data-category-check="${escapeHtml(cat.category)}" ${isSelected ? 'checked' : ''} ${!isAllowed ? 'disabled' : ''}>
-      <span>Выбрать</span>
+      <input type="checkbox" data-category-check="${escapeHtml(cat.category)}" ${isSelected ? 'checked' : ''} ${!isBulkCleanable ? 'disabled' : ''}>
+      <span>${isBulkCleanable ? 'Выбрать' : 'Только просмотр'}</span>
     </label>
   </div>
   <div class="category-paths">
@@ -1455,12 +1459,14 @@ function renderTable() {
   const pageItems = state.filteredFindings.slice(start, end);
 
   els.resultsBody.innerHTML = pageItems.map((f, i) => {
-    const checked = state.selectedPaths.has(f.path) ? 'checked' : '';
     const risk = f.risk;
-    const selectedClass = state.selectedPaths.has(f.path) ? ' selected' : '';
+    const isProtected = risk === Risk.PROTECTED;
+    const isSelected = !isProtected && state.selectedPaths.has(f.path);
+    const checked = isSelected ? 'checked' : '';
+    const selectedClass = isSelected ? ' selected' : '';
     return `
 <tr data-path="${escapeHtml(f.path)}" class="${selectedClass}" style="--risk-color: ${riskColor(risk)}; animation-delay: ${i * 15}ms">
-  <td><input type="checkbox" class="row-check" ${checked} data-path="${escapeHtml(f.path)}"></td>
+  <td><input type="checkbox" class="row-check" ${checked} ${isProtected ? 'disabled title="Защищённый системный путь — только просмотр"' : ''} data-path="${escapeHtml(f.path)}"></td>
   <td class="path-cell" title="${escapeHtml(f.path)}">
     <span class="file-icon">${categoryIcon(f.category)}</span>
     <span class="file-name">${escapeHtml(f.path)}</span>
@@ -1509,7 +1515,7 @@ function toggleSelectAll(e) {
     (state.currentPage - 1) * state.pageSize,
     state.currentPage * state.pageSize
   );
-  pageItems.forEach(f => {
+  pageItems.filter(f => f.risk !== Risk.PROTECTED).forEach(f => {
     if (target.checked) state.selectedPaths.add(f.path);
     else state.selectedPaths.delete(f.path);
   });
@@ -1529,7 +1535,9 @@ function updateSelectionUI() {
   // Reflect partial page selection on the "select all" checkbox
   if (els.selectAll) {
     const start = (state.currentPage - 1) * state.pageSize;
-    const pageItems = state.filteredFindings.slice(start, start + state.pageSize);
+    const pageItems = state.filteredFindings
+      .slice(start, start + state.pageSize)
+      .filter(f => f.risk !== Risk.PROTECTED);
     const selectedOnPage = pageItems.filter(f => state.selectedPaths.has(f.path)).length;
     els.selectAll.indeterminate = selectedOnPage > 0 && selectedOnPage < pageItems.length;
     if (pageItems.length > 0) els.selectAll.checked = selectedOnPage === pageItems.length;

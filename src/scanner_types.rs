@@ -75,6 +75,8 @@ pub struct ProgressSnapshot {
     pub cached: i64,
     pub total: i64,
     pub percent: f64,
+    /// True while the filesystem size is still being discovered and percent is an estimate.
+    pub estimated: bool,
     pub current: String,
     pub elapsed_s: f64,
     pub rate_fps: f64,

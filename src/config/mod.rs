@@ -70,8 +70,6 @@ pub struct Config {
     pub use_cache: bool,
     pub cache_dir: String,
 
-    // Web
-    pub web_port: u16,
 }
 
 impl Default for Config {
@@ -143,8 +141,6 @@ impl Config {
                 // Cache
                 use_cache: true,
                 cache_dir: "".to_string(),
-                // Web
-                web_port: 0,
             }
         }
 
@@ -154,14 +150,10 @@ impl Config {
                 root: "/".to_string(),
                 workers: 0,
                 follow_links: false,
-                exclude_dirs: vec![
-                    "/System".to_string(),
-                    "/Library".to_string(),
-                    "/private".to_string(),
-                    "/Volumes".to_string(),
-                    "/Network".to_string(),
-                ],
-                exclude_prefix: vec![],
+                // Scan local and mounted volumes completely. Protected macOS locations are kept
+                // visible only for large-file review and remain blocked from deletion by rules.
+                exclude_dirs: vec![],
+                exclude_prefix: vec!["/Network".to_string()],
                 large_bytes: 100 * 1024 * 1024, // 100 MB
                 huge_bytes: 500 * 1024 * 1024,  // 500 MB
                 stale_days: 180,
@@ -209,8 +201,6 @@ impl Config {
                 // Cache
                 use_cache: true,
                 cache_dir: "".to_string(),
-                // Web
-                web_port: 0,
             }
         }
 
@@ -274,8 +264,6 @@ impl Config {
                 // Cache
                 use_cache: true,
                 cache_dir: "".to_string(),
-                // Web
-                web_port: 0,
             }
         }
     }
@@ -374,8 +362,6 @@ impl Config {
         // Cache
         merge_field!(use_cache, Self::default().use_cache);
         merge_field!(cache_dir, Self::default().cache_dir);
-        // Web
-        merge_field!(web_port, Self::default().web_port);
     }
 
     fn expand_env_vars(&mut self) {
@@ -494,9 +480,6 @@ impl Config {
         }
         if self.min_cache_size_bytes == 0 {
             self.min_cache_size_bytes = 10 * 1024 * 1024;
-        }
-        if self.web_port == 0 {
-            self.web_port = 8080;
         }
     }
 

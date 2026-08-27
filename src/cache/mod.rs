@@ -16,8 +16,8 @@ pub trait Cache: Send + Sync {
     fn lookup(&self, key: &str, fp: &Fingerprint) -> Option<CacheEntry>;
     #[allow(dead_code)]
     fn save(&self, key: &str, entry: CacheEntry) -> Result<()>;
-    fn save_total(&self, n: i64) -> Result<()>;
-    fn load_total(&self) -> Option<i64>;
+    fn save_total(&self, root_key: &str, n: i64) -> Result<()>;
+    fn load_total(&self, root_key: &str) -> Option<i64>;
 }
 
 /// Redb-based cache implementation
@@ -91,22 +91,23 @@ impl Cache for BoltCache {
         Ok(())
     }
 
-    fn save_total(&self, n: i64) -> Result<()> {
+    fn save_total(&self, root_key: &str, n: i64) -> Result<()> {
         let write_txn = self.db.begin_write()?;
         { 
             let mut table = write_txn.open_table(META_TABLE)?; 
-            let key = b"total";
+            let key = format!("total:{root_key}");
             let value = n.to_le_bytes();
-            table.insert(key.as_slice(), value.as_slice())?; 
+            table.insert(key.as_bytes(), value.as_slice())?; 
         }
         write_txn.commit()?;
         Ok(())
     }
 
-    fn load_total(&self) -> Option<i64> {
+    fn load_total(&self, root_key: &str) -> Option<i64> {
         let read_txn = self.db.begin_read().ok()?;
         let table = read_txn.open_table(META_TABLE).ok()?;
-        let data = table.get(b"total".as_slice()).ok()??;
+        let key = format!("total:{root_key}");
+        let data = table.get(key.as_bytes()).ok()??;
         let bytes: [u8; 8] = data.value().try_into().ok()?;
         Some(i64::from_le_bytes(bytes))
     }
@@ -154,5 +155,10 @@ mod tests {
         
         assert_eq!(loaded.files.len(), 1);
         assert_eq!(loaded.files[0].path, "C:\\test\\file.txt");
+
+        cache.save_total("c:\\", 10).unwrap();
+        cache.save_total("d:\\", 20).unwrap();
+        assert_eq!(cache.load_total("c:\\"), Some(10));
+        assert_eq!(cache.load_total("d:\\"), Some(20));
     }
 }

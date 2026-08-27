@@ -1,7 +1,6 @@
-//! HTTP server with embedded web UI and REST API
+//! Internal desktop request router with embedded UI and JSON API
 
 use std::collections::HashMap;
-use std::net::SocketAddr;
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
@@ -16,13 +15,12 @@ use axum::{
 };
 use mime_guess::from_path;
 use rust_embed::RustEmbed;
-use tokio::signal;
 use tracing::{error, info};
 
 use crate::cache::{config_hash as cache_config_hash, BoltCache, Cache};
 use crate::cleaner::{hard_delete, recycle_bin, DeleteResult};
 use crate::config::Config;
-use crate::rules::{Category, Engine, Finding};
+use crate::rules::{is_protected, Category, Engine, Finding, Risk};
 use crate::scanner::{Progress, Scanner};
 use crate::scanner_types::{FileRecord, Options, ScanError};
 
@@ -256,78 +254,7 @@ pub fn create_router(state: ServerState) -> Router {
         .route("/api/smart-categories", get(handle_smart_categories))
         .route("/api/smart-clean", post(handle_smart_clean))
         .fallback(handle_static)
-        .layer(tower_http::cors::CorsLayer::permissive())
         .with_state(state)
-}
-
-/// Start the HTTP server and open the user's default browser
-pub async fn run_server(config: Config) -> anyhow::Result<()> {
-    let url = format!("http://127.0.0.1:{}", config.web_port);
-    tokio::spawn(async move {
-        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-        let _ = open::that(&url);
-    });
-
-    run_server_headless(config).await
-}
-
-/// Start the HTTP server without opening a browser (used by the desktop shell)
-pub async fn run_server_headless(config: Config) -> anyhow::Result<()> {
-    run_server_ready(config, |_| {}).await
-}
-
-/// Bind the server (resolving an ephemeral port when `web_port == 0`),
-/// report the actually bound port via `on_ready`, then serve until shutdown.
-pub async fn run_server_ready<F>(config: Config, on_ready: F) -> anyhow::Result<()>
-where
-    F: FnOnce(u16),
-{
-    let state = ServerState::new(config);
-    let requested = state.config.lock().unwrap().web_port;
-    let addr = SocketAddr::from(([127, 0, 0, 1], requested));
-
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    let actual = listener.local_addr()?.port();
-
-    {
-        let mut c = state.config.lock().unwrap();
-        c.web_port = actual;
-    }
-
-    let app = create_router(state.clone());
-
-    info!("Starting web server on http://127.0.0.1:{}", actual);
-
-    on_ready(actual);
-
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
-
-    Ok(())
-}
-
-async fn shutdown_signal() {
-    let ctrl_c = async {
-        signal::ctrl_c()
-            .await
-            .expect("Failed to install Ctrl+C handler");
-    };
-    #[cfg(unix)]
-    let terminate = async {
-        signal::unix::signal(signal::unix::SignalKind::terminate())
-            .expect("Failed to install signal handler")
-            .recv()
-            .await;
-    };
-    #[cfg(not(unix))]
-    let terminate = std::future::pending::<()>();
-
-    tokio::select! {
-        _ = ctrl_c => {},
-        _ = terminate => {},
-    }
-    info!("Shutdown signal received");
 }
 
 async fn handle_scan(
@@ -372,6 +299,8 @@ async fn handle_scan(
     *state.cancel_flag.lock().unwrap() = false;
 
     let progress = Progress::new();
+    progress.begin_segment(0, 1);
+    progress.set_current("Сканирование файлов…");
     *state.progress.lock().unwrap() = Some(progress.clone());
 
     let opts = Options {
@@ -390,6 +319,7 @@ async fn handle_scan(
         None
     };
 
+    let task_progress = progress.clone();
     let scanner = Scanner::new(opts, progress, cache);
     *state.scanner.lock().unwrap() = Some(scanner.clone());
 
@@ -425,22 +355,29 @@ async fn handle_scan(
             }
         };
 
+        task_progress.set_phase("Классификация найденных файлов…", 92.0);
         let engine = Engine::new(Arc::new(cfg_clone.clone()));
         let mut findings = engine.analyze(&recs);
+        task_progress.set_phase("Подготовка результатов…", 96.0);
 
         if cfg_clone.check_duplicates {
-            let dups = engine.find_duplicates(&recs);
+            task_progress.set_phase("Проверка содержимого дубликатов…", 97.0);
+            let duplicate_progress = task_progress.clone();
+            let dups = engine.find_duplicates_with_progress(&recs, move |done, total| {
+                if total > 0 {
+                    duplicate_progress.set_percent(97.0 + 1.8 * done as f64 / total as f64);
+                }
+            });
             findings.extend(dups);
         }
 
+        task_progress.set_phase("Сортировка результатов…", 99.0);
         findings.sort_by(|a, b| b.size.cmp(&a.size));
 
-        if let Some(p) = state_clone.progress.lock().unwrap().as_ref() {
-            p.finish();
-        }
         *state_clone.records.lock().unwrap() = recs;
         *state_clone.errors.lock().unwrap() = errs;
         *state_clone.findings.lock().unwrap() = findings;
+        task_progress.finish();
         *state_clone.scan_done.lock().unwrap() = true;
     });
 
@@ -532,6 +469,20 @@ async fn handle_delete(
             .into_response();
     }
 
+    let config = state.config.lock().unwrap().clone();
+    if config.protect_system
+        && !config.allow_protected
+        && req.paths.iter().any(|path| is_protected(path))
+    {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "error": "protected system paths are view-only; disable system protection explicitly to delete them"
+            })),
+        )
+            .into_response();
+    }
+
     let result: Result<DeleteResult, anyhow::Error> = if req.mode == "hard" {
         hard_delete(&req.paths)
     } else {
@@ -597,10 +548,6 @@ async fn handle_put_config(
     if let Some(v) = update.get("allow_protected").and_then(|x| x.as_bool()) {
         cfg.allow_protected = v;
     }
-    if let Some(v) = update.get("web_port").and_then(|x| x.as_u64()) {
-        cfg.web_port = v as u16;
-    }
-
     *state.config.lock().unwrap() = cfg.clone();
 
     if let Err(e) = cfg.save(Path::new("config.toml")) {
@@ -748,6 +695,7 @@ async fn handle_smart_scan(State(state): State<ServerState>) -> impl IntoRespons
     *state.cancel_flag.lock().unwrap() = false;
 
     let progress = Progress::new();
+    progress.set_current("Подготовка Windows-сканирования…");
     *state.progress.lock().unwrap() = Some(progress.clone());
 
     let opts = Options {
@@ -766,6 +714,7 @@ async fn handle_smart_scan(State(state): State<ServerState>) -> impl IntoRespons
         None
     };
 
+    let task_progress = progress.clone();
     let scanner = Scanner::new(opts, progress, cache);
     *state.scanner.lock().unwrap() = Some(scanner.clone());
 
@@ -786,10 +735,13 @@ async fn handle_smart_scan(State(state): State<ServerState>) -> impl IntoRespons
         let recs_result = tokio::task::spawn_blocking(move || {
             let mut all_recs: Vec<FileRecord> = Vec::new();
             let mut all_errs: Vec<ScanError> = Vec::new();
-            for r in &walk_roots {
+            let root_count = walk_roots.len();
+            for (index, r) in walk_roots.iter().enumerate() {
                 if scanner.is_stopped() {
                     break;
                 }
+                task_progress.begin_segment(index, root_count);
+                task_progress.set_current(format!("Сканирование {r}"));
                 match scanner.walk(r) {
                     Ok((mut recs, errs)) => {
                         all_recs.append(&mut recs);
@@ -822,25 +774,44 @@ async fn handle_smart_scan(State(state): State<ServerState>) -> impl IntoRespons
             }
         };
 
+        if let Some(progress) = state_clone.progress.lock().unwrap().as_ref() {
+            progress.set_phase("Классификация найденных файлов…", 92.0);
+        }
         let engine = Engine::new(Arc::new(cfg_clone.clone()));
         let mut findings = engine.analyze(&recs);
+        if let Some(progress) = state_clone.progress.lock().unwrap().as_ref() {
+            progress.set_phase("Подготовка результатов…", 96.0);
+        }
 
         if cfg_clone.check_duplicates {
-            let dups = engine.find_duplicates(&recs);
+            let duplicate_progress = state_clone.progress.lock().unwrap().clone();
+            if let Some(progress) = duplicate_progress.as_ref() {
+                progress.set_phase("Проверка содержимого дубликатов…", 97.0);
+            }
+            let dups = engine.find_duplicates_with_progress(&recs, move |done, total| {
+                if total > 0 {
+                    if let Some(progress) = duplicate_progress.as_ref() {
+                        progress.set_percent(97.0 + 1.8 * done as f64 / total as f64);
+                    }
+                }
+            });
             findings.extend(dups);
         }
 
+        if let Some(progress) = state_clone.progress.lock().unwrap().as_ref() {
+            progress.set_phase("Сортировка и проверка безопасности…", 99.0);
+        }
         findings.sort_by(|a, b| b.size.cmp(&a.size));
 
         // Filter by safety level
         findings = filter_findings_by_safety(findings, &cfg_clone);
 
-        if let Some(p) = state_clone.progress.lock().unwrap().as_ref() {
-            p.finish();
-        }
         *state_clone.records.lock().unwrap() = recs;
         *state_clone.errors.lock().unwrap() = errs;
         *state_clone.findings.lock().unwrap() = findings;
+        if let Some(progress) = state_clone.progress.lock().unwrap().as_ref() {
+            progress.finish();
+        }
         *state_clone.scan_done.lock().unwrap() = true;
     });
 
@@ -862,8 +833,14 @@ async fn handle_smart_categories(State(state): State<ServerState>) -> impl IntoR
     }
 
     let categories = build_category_summaries(&findings);
-    let total_reclaimable: u64 = categories.iter().map(|c| c.total_size).sum();
-    let total_files: usize = categories.iter().map(|c| c.count).sum();
+    // "Reclaimable" means safe for bulk cleanup. Caution/protected findings are useful review
+    // candidates but must not inflate the one-click cleanup total.
+    let total_reclaimable: u64 = findings
+        .iter()
+        .filter(|finding| finding.risk == Risk::Safe)
+        .map(|finding| finding.size as u64)
+        .sum();
+    let total_files = findings.len();
 
     Json(SmartScanResponse {
         scan_id: *state.scan_id.lock().unwrap(),
@@ -893,6 +870,9 @@ async fn handle_smart_clean(
     let category_set: std::collections::HashSet<String> = req.categories.into_iter().collect();
     let paths_to_delete: Vec<String> = findings
         .iter()
+        // Bulk smart-clean only handles high-confidence safe results. Caution/protected findings
+        // (including Large/Huge) stay available for explicit, individual review.
+        .filter(|f| f.risk == Risk::Safe)
         .filter(|f| category_set.contains(&f.category.to_string()))
         .map(|f| f.path.clone())
         .collect();
@@ -968,6 +948,35 @@ fn all_root_volumes() -> Vec<String> {
 }
 
 fn smart_scan_roots(root: &str, safety: &crate::config::SafetyLevel) -> Vec<String> {
+    #[cfg(target_os = "windows")]
+    {
+        let _ = safety;
+        // A drive-root selection means "scan this Windows machine", so include every available
+        // volume. A custom folder remains strictly scoped to that folder.
+        if std::path::Path::new(root).parent().is_none() {
+            all_root_volumes()
+        } else {
+            vec![root.to_string()]
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let _ = safety;
+        // Every macOS safety level scans the complete selected tree so large files cannot be
+        // missed. Selecting `/` also covers mounted volumes reachable below `/Volumes`; a custom
+        // folder remains strictly scoped to that folder.
+        vec![root.to_string()]
+    }
+
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    {
+        smart_scan_roots_fast(root, safety)
+    }
+}
+
+#[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+fn smart_scan_roots_fast(root: &str, safety: &crate::config::SafetyLevel) -> Vec<String> {
     use crate::config::SafetyLevel as SL;
 
     if *safety == SL::Aggressive {
@@ -992,7 +1001,11 @@ fn smart_scan_roots(root: &str, safety: &crate::config::SafetyLevel) -> Vec<Stri
     let home = dirs::home_dir()
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|| root_norm.clone());
-    let user_base = if is_filesystem_root { home } else { root_norm.clone() };
+    let user_base = if is_filesystem_root {
+        home
+    } else {
+        root_norm.clone()
+    };
 
     let mut zones: Vec<String> = Vec::new();
     let mut push = |p: String| {
@@ -1025,7 +1038,10 @@ fn smart_scan_roots(root: &str, safety: &crate::config::SafetyLevel) -> Vec<Stri
         // Recycle Bin exists on each fixed drive — cover every one so trash on both disks is seen.
         if is_filesystem_root {
             for drive in all_root_volumes() {
-                push(format!("{}\\$Recycle.Bin", drive.trim_end_matches(['/', '\\'])));
+                push(format!(
+                    "{}\\$Recycle.Bin",
+                    drive.trim_end_matches(['/', '\\'])
+                ));
             }
         }
     }
@@ -1072,6 +1088,8 @@ fn filter_findings_by_safety(findings: Vec<Finding>, config: &Config) -> Vec<Fin
             Category::VSCodeCache,
             Category::OldLog,
             Category::StaleInstall,
+            Category::Large,
+            Category::Huge,
         ],
         SafetyLevel::Balanced => vec![
             Category::Junk,
@@ -1187,8 +1205,9 @@ fn get_category_description(category: crate::rules::Category) -> String {
 
 #[cfg(test)]
 mod smart_scan_root_tests {
-    use super::smart_scan_roots;
-    use crate::config::SafetyLevel;
+    use super::{filter_findings_by_safety, smart_scan_roots};
+    use crate::config::{Config, SafetyLevel};
+    use crate::rules::{Category, Finding, Risk};
 
     #[test]
     fn balanced_custom_root_never_escapes_selected_folder() {
@@ -1199,6 +1218,8 @@ mod smart_scan_root_tests {
         let targets = smart_scan_roots(&root_text, &SafetyLevel::Balanced);
 
         assert!(!targets.is_empty());
+        #[cfg(windows)]
+        assert_eq!(targets, vec![root_text.clone()]);
         assert!(
             targets.iter().all(|target| target.starts_with(&root_text)),
             "{targets:?}"
@@ -1214,5 +1235,33 @@ mod smart_scan_root_tests {
             smart_scan_roots(&root_text, &SafetyLevel::Aggressive),
             vec![root_text]
         );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn balanced_macos_scan_uses_the_complete_selected_tree() {
+        assert_eq!(
+            smart_scan_roots("/", &SafetyLevel::Balanced),
+            vec!["/".to_string()]
+        );
+    }
+
+    #[test]
+    fn safe_scan_keeps_large_files_as_review_candidates() {
+        let mut config = Config::default();
+        config.smart_junk_safety_level = SafetyLevel::Safe;
+        let finding = Finding::new(
+            "large.bin".to_string(),
+            200 * 1024 * 1024,
+            Category::Large,
+            "large file".to_string(),
+            Risk::Caution,
+            std::time::SystemTime::now(),
+        );
+
+        let filtered = filter_findings_by_safety(vec![finding], &config);
+
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].category, Category::Large);
     }
 }

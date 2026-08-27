@@ -1,0 +1,35 @@
+name: Desktop CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  desktop:
+    name: ${{ matrix.os }} desktop
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Validate embedded UI JavaScript
+        run: node --check web/app.js
+
+      - name: Test desktop application
+        run: cargo test --features desktop
+
+      - name: Build release desktop application
+        run: cargo build --release --features desktop
+
+      - name: Package macOS application bundle
+        if: runner.os == 'macOS'
+        run: bash scripts/build-desktop-macos.sh

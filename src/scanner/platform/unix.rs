@@ -54,7 +54,7 @@ impl UnixWalker {
         let root_str = root_path.to_string_lossy().to_string();
 
         if let Some(cache) = &self.cache {
-            if let Some(total) = cache.load_total() {
+            if let Some(total) = cache.load_total(&root_str.to_lowercase()) {
                 self.progress.set_total(total as i64);
             }
         }
@@ -177,8 +177,6 @@ impl UnixWalker {
             })
             .collect();
 
-        self.progress.finish();
-
         let mut recs = Vec::new();
         let mut errs = Vec::new();
         let mut cached_count = 0usize;
@@ -191,7 +189,7 @@ impl UnixWalker {
         }
 
         if let Some(cache) = &self.cache {
-            let _ = cache.save_total(recs.len() as i64);
+            let _ = cache.save_total(&root_str.to_lowercase(), recs.len() as i64);
         }
 
         let _ = cached_count;

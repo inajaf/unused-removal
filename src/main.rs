@@ -24,7 +24,6 @@ use tracing_subscriber::{fmt, EnvFilter};
 
 use crate::cli::{bench_cmd, config_cmd, scan_cmd, smart_clean_cmd};
 use crate::config::{Config, SafetyLevel};
-use crate::server::run_server;
 
 #[derive(Parser)]
 #[command(
@@ -78,19 +77,9 @@ enum Commands {
         #[arg(short, long, default_value_t = 10)]
         top: usize,
     },
-    /// Start web interface
-    Serve {
-        /// Port to listen on (0 = auto)
-        #[arg(short, long)]
-        port: Option<u16>,
-    },
     /// Launch as a desktop application (native window; requires the `desktop` feature)
     #[cfg(feature = "desktop")]
-    App {
-        /// Port for the embedded UI server
-        #[arg(short, long)]
-        port: Option<u16>,
-    },
+    App,
     /// Run interactive TUI
     Tui,
     /// Run benchmark
@@ -176,19 +165,9 @@ fn main() -> Result<()> {
             }
             scan_cmd(&cfg, json, csv, top)?;
         }
-        Some(Commands::Serve { port }) => {
-            let mut cfg = config;
-            if let Some(p) = port {
-                cfg.web_port = p;
-            }
-            let rt = tokio::runtime::Builder::new_multi_thread()
-                .enable_all()
-                .build()?;
-            rt.block_on(run_server(cfg))?;
-        }
         #[cfg(feature = "desktop")]
-        Some(Commands::App { port }) => {
-            desktop::run_app(config, port)?;
+        Some(Commands::App) => {
+            desktop::run_app(config)?;
         }
         Some(Commands::Tui) => {
             tui::run(config)?;
@@ -225,15 +204,10 @@ fn main() -> Result<()> {
             smart_clean_cmd(&cfg, dry_run, yes, json, csv)?;
         }
         None => {
-            // No subcommand: auto-detect terminal for TUI vs Web
-            if atty::is(atty::Stream::Stdin) && atty::is(atty::Stream::Stdout) {
-                tui::run(config)?;
-            } else {
-                let rt = tokio::runtime::Builder::new_multi_thread()
-                    .enable_all()
-                    .build()?;
-                rt.block_on(run_server(config))?;
-            }
+            #[cfg(feature = "desktop")]
+            desktop::run_app(config)?;
+            #[cfg(not(feature = "desktop"))]
+            tui::run(config)?;
         }
     }
 

@@ -7,11 +7,11 @@ Fast, cross-platform file scanner and cleaner. Single static binary (~15 MB), no
 | Feature | Description |
 |---------|-------------|
 | **Parallel scanning** | Multi-threaded walker using all CPU cores. 100k+ files/sec. |
-| **Smart categorization** | Large/huge files, junk (temp/cache/logs), stale files, duplicates, old installers, app leftovers. |
+| **Smart categorization** | Large/huge files are always surfaced, plus junk (temp/cache/logs), stale files, duplicates, old installers, and app leftovers. |
 | **Incremental cache** | Embedded database (redb) — repeat scans are near-instant (only changed directories re-scanned). |
-| **Web interface** | Built-in HTTP server on `127.0.0.1`. Modern SPA with table, filters, sorting, multi-select, export. |
+| **Desktop interface** | Native WebView window with an internal protocol: no browser, network listener, or open port. |
 | **Safe deletion** | Default: Recycle Bin (reversible). Hard delete requires explicit confirmation. |
-| **System protection** | Windows: WinSxS, System32, Program Files, pagefile.sys, hiberfil.sys — never suggested for deletion. macOS/Linux: `/System`, `/Library`, `/bin`, `/sbin`, etc. |
+| **System protection** | Large Windows system files remain visible as protected, read-only findings; WinSxS, System32, Program Files, pagefile.sys, hiberfil.sys, etc. are never bulk-cleaned. |
 | **Zero dependencies** | Single statically-linked binary. Works on Windows 10/11, macOS 12+, Linux. |
 
 ## Installation
@@ -22,7 +22,7 @@ Download `unused-removal` from [Releases](https://github.com/inajaf/unused-remov
 # Requires Rust 1.75+
 git clone https://github.com/inajaf/unused-removal
 cd unused-removal
-cargo build --release
+cargo build --release --features desktop
 # Binary at ./target/release/unused-removal (or unused-removal.exe on Windows)
 ```
 
@@ -30,8 +30,8 @@ cargo build --release
 
 ### Desktop app (native window)
 
-The same web UI wrapped in a native OS window (tao + wry). Built additively via the
-`desktop` cargo feature — the plain binary and all existing commands are unaffected.
+The interface runs only inside a native OS window (tao + wry). UI assets and API calls use a
+private WebView protocol; the application does not start an HTTP server or listen on a port.
 
 ```bash
 # Run from source
@@ -48,19 +48,11 @@ cargo run --release --features desktop -- app
 .\scripts\build-desktop-windows.ps1 [-Installer]
 ```
 
-The app assigns a free ephemeral port automatically, so multiple instances never
-conflict. `--port` overrides it if needed.
-
-### Web UI (recommended)
-
-```bash
-unused-removal serve --port 8080
-# Opens http://127.0.0.1:8080 in your browser
-```
-
 1. Select a drive or folder (C:\, D:\, /home, custom path).
-2. Choose **Safe** or **Balanced** for a fast scan of known junk locations, or
-   **Aggressive** to scan the complete selected tree.
+2. On Windows and macOS every safety level scans the complete selected tree (all available drives
+   when a Windows drive root is selected). The level controls which cleanup categories are shown,
+   not whether large files elsewhere on disk are skipped. On Linux, **Aggressive** scans the full
+   tree.
 3. Review categories, then open any category in the detailed results table if needed.
 4. **Move to Trash** — safe, recoverable.
 5. **Delete Permanently** — only after explicit confirmation.
@@ -155,7 +147,7 @@ unused-removal/
 │   │   └── mod.rs            # trash crate (cross-platform) + hard delete
 │   ├── config/               # TOML + env overrides
 │   └── server/               # Web server (axum) + embedded assets
-│       ├── mod.rs            # HTTP API: /scan, /stop, /progress, /results, /delete, /export
+│       ├── mod.rs            # Internal desktop API: /scan, /stop, /progress, /results, /delete, /export
 │       └── web/              # HTML/CSS/JS (rust-embed)
 ├── web/                      # Source web assets
 │   ├── index.html
@@ -213,7 +205,8 @@ cargo run --release -- bench --files 100000 --depth 4 --serial
 ## Safety
 
 - **Default**: Recycle Bin/Trash only. Recoverable from system trash.
-- **Protected paths** (OS directories, pagefile, hiberfile, boot) **never** appear in results unless `protect_system = false`.
+- Large files in protected Windows paths may appear with risk **Protected**, but cannot be selected
+  or deleted while `protect_system = true`; other protected cleanup suggestions stay hidden.
 - **Hard delete** requires clicking "Delete Permanently" + modal confirmation with warning.
 - **Access errors** (permission denied, etc.) are logged; scan continues.
 

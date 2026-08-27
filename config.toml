@@ -49,4 +49,3 @@ allow_protected = false
 smart_junk_safety_level = "balanced"
 use_cache = false
 cache_dir = ""
-web_port = 3082

@@ -60,7 +60,7 @@
 - Quarantine — реальный каталог; файлы там доступны для восстановления.
 
 ### 3.4 Интерфейс
-- **Web** (`http://localhost:8080`) по умолчанию: HTML + JS, встроены через `template`.
+- **Desktop** по умолчанию: HTML + JS внутри нативного WebView, без HTTP-сервера и портов.
 - **CLI** (`./usrm -s C:\`): fast one-shot scan + table output.
 - UI: Bootstrap-like CSS inline, no external deps.
 
@@ -105,7 +105,6 @@ allow_protected = false             # user must explicitly allow
 use_cache = true                    # cache stat results
 cache_dir = ""                      # empty = auto (per-run temp dir)
 
-web_port = 0                         # auto
 
 [Quarantine]
 path = "%LOCALAPPDATA\\unused-removal\\Quarantine"
@@ -166,8 +165,8 @@ path = "%LOCALAPPDATA\\unused-removal\\Quarantine"
 - [ ] Hard-delete ONLY after explicit double-click confirm.
 - [ ] Quarantine log (`quarantine.log`) — JSON, append-only.
 
-### Фаза 3 — Web UI (Week 4–5)
-- [ ] HTTP server with `chi` / `gin`.
+### Фаза 3 — Desktop UI (Week 4–5)
+- [ ] Internal desktop request router (no network listener).
 - [ ] HTML template inline: table, buttons, summary.
 - [ ] Client-side JS: scan trigger, move/delete actions.
 - [ ] JSON API endpoints: `/scan`, `/results`, `/quarantine`.
@@ -220,7 +219,7 @@ path = "%LOCALAPPDATA\\unused-removal\\Quarantine"
 
 ## 10. Следующие шаги (имmediately)
 
-1. **Выберите интерфейс**: TUI (CLI-only, table in terminal) или Web UI (`http://localhost:8080`)?  
+1. **Выберите интерфейс**: TUI (CLI-only, table in terminal) или нативный Desktop UI?  
    *(Это влияет на UI-компоненты и архитектуру API; ответните, чтобы я адаптировал план под ваш выбор.)*
 
 2. **Уточните приоритеты**:  
@@ -236,4 +235,4 @@ path = "%LOCALAPPDATA\\unused-removal\\Quarantine"
 ---
 
 > **Резюме**:  
-> Go + parallel filesystem walk + explicit classification rules + quarantine-first deletion policy = быстрый, безопасный, интуитивный инструмент для Windows. Web UI — основной интерфейс; CLI — быстрый fallback. План по 7 неделям при одном разработчике.
+> Go + parallel filesystem walk + explicit classification rules + quarantine-first deletion policy = быстрый, безопасный, интуитивный инструмент для Windows. Desktop UI — основной интерфейс; CLI — быстрый fallback. План по 7 неделям при одном разработчике.
