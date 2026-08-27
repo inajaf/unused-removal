@@ -1,12 +1,11 @@
-root = "/Users/eldar/Downloads"
-workers = 8
+root = 'C:\'
+workers = 4
 follow_links = false
 exclude_dirs = [
-    "/System",
-    "/Library",
-    "/private",
-    "/Volumes",
-    "/Network",
+    "System Volume Information",
+    "WinSxS",
+    "SoftwareDistribution",
+    "Windows Defender",
 ]
 exclude_prefix = []
 large_bytes = 104857600
@@ -28,7 +27,7 @@ junk_dirs = [
     "/private/tmp",
     "/var/folders",
 ]
-check_duplicates = false
+check_duplicates = true
 smart_junk_enabled = true
 scan_user_caches = true
 scan_system_logs = true
@@ -50,4 +49,4 @@ allow_protected = false
 smart_junk_safety_level = "balanced"
 use_cache = false
 cache_dir = ""
-web_port = 51737
+web_port = 3082

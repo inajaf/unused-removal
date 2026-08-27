@@ -5,19 +5,47 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Condvar};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use windows::Win32::Foundation::{FILETIME, INVALID_HANDLE_VALUE, CloseHandle};
+use windows::Win32::Foundation::{INVALID_HANDLE_VALUE, CloseHandle};
 use windows::Win32::Storage::FileSystem::{
     FindFirstFileExW, FindNextFileW, FindClose, FIND_FIRST_EX_LARGE_FETCH, FINDEX_INFO_LEVELS,
     FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_HIDDEN, FILE_ATTRIBUTE_SYSTEM,
-    WIN32_FIND_DATAW, CreateFileW, GetFileInformationByHandle, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+    CreateFileW, GetFileInformationByHandle, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
     FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_SHARE_DELETE, OPEN_EXISTING,
     BY_HANDLE_FILE_INFORMATION,
 };
 use windows::Win32::Foundation::GENERIC_READ;
 use windows::core::PCWSTR;
 
+/// Local copy of the canonical Win32_FIND_DATA (Unicode) layout so `FindFirstFileExW` can fill it in place.
+/// Field order/types mirror `_WIN32_FIND_DATAW` exactly; `#[repr(C)]` keeps offsets aligned to Windows.
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+struct FileTime {
+    dwLowDateTime: u32,
+    dwHighDateTime: u32,
+}
+
+/// Local copy of the canonical Win32_FIND_DATA (Unicode) layout so `FindFirstFileExW` can fill it in place.
+/// Field order/types mirror `_WIN32_FIND_DATAW` exactly; `#[repr(C)]` keeps offsets aligned to Windows.
+/// Large array fields (>32 elements) don't get a blanket `Default`, and callers use `std::mem::zeroed()` instead.
+#[repr(C)]
+#[derive(Debug)]
+struct FindData {
+    dwFileAttributes: u32,
+    ftCreationTime: FileTime,
+    ftLastAccessTime: FileTime,
+    ftLastWriteTime: FileTime,
+    nFileSizeHigh: u32,
+    nFileSizeLow: u32,
+    // Windows inserts reserved/padding fields before cFileName; keeping them preserves offsets.
+    dwReserved0: u32,
+    dwReserved1: u32,
+    cFileName: [u16; 260],
+    cAlternateFileName: [u16; 14],
+}
+
 use crate::cache::Cache;
-use crate::scanner_types::{CacheEntry, Fingerprint, Attrs, FileRecord, ScanError, Options, DirId, FLUSH_BATCH};
+use crate::scanner_types::{CacheEntry, Fingerprint, Attrs, FileRecord, ScanError, Options, DirId};
 use crate::scanner::platform::Progress;
 
 struct TaskGuard<'a> {
@@ -32,6 +60,12 @@ impl<'a> TaskGuard<'a> {
 
 impl<'a> Drop for TaskGuard<'a> {
     fn drop(&mut self) {
+        // Perform the final decrement and the "no more work" broadcast under the queue mutex.
+        // A worker that holds the queue lock, observes total_tasks > 0, and is about to call
+        // Condvar::wait() would otherwise MISS a notify_all() fired by another worker finishing
+        // the last task (a Condvar has no pending-notify memory). That miss lets the last worker
+        // sleep forever while total_tasks is already 0 -> guaranteed multi-worker hang.
+        let _queue_guard = self.walker.queue.lock().unwrap();
         let prev = self.walker.total_tasks.load(Ordering::Relaxed);
         if prev > 0 {
             self.walker.total_tasks.fetch_sub(1, Ordering::Relaxed);
@@ -50,7 +84,12 @@ pub struct WindowsWalker {
     queue: Arc<Mutex<Vec<String>>>,
     queue_not_empty: Arc<Condvar>,
     workers_done: Arc<Mutex<usize>>,
-    total_tasks: AtomicU64,
+    // Shared across all worker clones (must be Arc, NOT a plain AtomicU64). If it stayed a plain
+    // field, Clone would give every worker its OWN private copy of the counter, so each worker's
+    // increment/decrement updated a different variable and the "queue empty && total_tasks == 0"
+    // termination predicate never reflected real work — causing both premature "Files: 0" and
+    // multi-worker hangs (workers wait forever on a counter that never reaches a shared zero).
+    total_tasks: Arc<AtomicU64>,
     recs: Arc<Mutex<Vec<FileRecord>>>,
     errs: Arc<Mutex<Vec<ScanError>>>,
     exclude_lower: Vec<String>,
@@ -75,7 +114,7 @@ impl WindowsWalker {
             queue: Arc::new(Mutex::new(Vec::with_capacity(4096))),
             queue_not_empty: Arc::new(Condvar::new()),
             workers_done: Arc::new(Mutex::new(0)),
-            total_tasks: AtomicU64::new(0),
+            total_tasks: Arc::new(AtomicU64::new(0)),
             recs: Arc::new(Mutex::new(Vec::new())),
             errs: Arc::new(Mutex::new(Vec::new())),
             exclude_lower,
@@ -97,18 +136,22 @@ impl WindowsWalker {
             }
         }
 
-        let mut handles = Vec::with_capacity(self.opts.workers);
-        for _ in 0..self.opts.workers {
-            let walker = self.clone();
-            handles.push(thread::spawn(move || walker.worker_loop()));
-        }
-
+        // Seed the root onto the queue and mark one pending task BEFORE spawning workers.
+        // Otherwise every worker can grab the empty queue while total_tasks is still 0 and exit
+        // immediately via TaskGuard accounting, so `root` never gets processed and EVERY scan
+        // reports "Files: 0" regardless of real contents (deterministic for any worker count).
         {
             let mut queue = self.queue.lock().unwrap();
             queue.push(root_str);
             self.total_tasks.fetch_add(1, Ordering::Relaxed);
         }
-        self.queue_not_empty.notify_one();
+
+        let mut handles = Vec::with_capacity(self.opts.workers);
+        for _ in 0..self.opts.workers {
+            let walker = self.clone();
+            handles.push(thread::spawn(move || walker.worker_loop()));
+        }
+        self.queue_not_empty.notify_all();
 
         for handle in handles { handle.join().unwrap(); }
 
@@ -207,15 +250,8 @@ impl WindowsWalker {
     fn add_record(&self, record: FileRecord) {
         self.progress.add_file(record.size);
         self.progress.add_recent_path(record.path.clone());
-        let mut local = Vec::new();
-        local.push(record);
-        if local.len() >= FLUSH_BATCH { self.flush_records(local); }
-    }
-
-    fn flush_records(&self, mut local: Vec<FileRecord>) {
-        if local.is_empty() { return; }
         let mut recs = self.recs.lock().unwrap();
-        recs.append(&mut local);
+        recs.push(record);
     }
 
     fn add_error(&self, path: String, error: String) {
@@ -224,8 +260,13 @@ impl WindowsWalker {
     }
 
     fn push_dir(&self, dir: &str) {
+        // Increment total_tasks under the same queue mutex that workers hold while deciding to
+        // wait. Keeps the "queue empty && total_tasks == 0" exit predicate consistent with the
+        // Condvar wait (no stale read can trick a worker into exiting while work is still queued).
+        let mut queue = self.queue.lock().unwrap();
         self.total_tasks.fetch_add(1, Ordering::Relaxed);
-        { let mut queue = self.queue.lock().unwrap(); queue.push(dir.to_string()); }
+        queue.push(dir.to_string());
+        drop(queue);
         self.queue_not_empty.notify_one();
     }
 
@@ -265,7 +306,7 @@ impl Clone for WindowsWalker {
             queue: self.queue.clone(),
             queue_not_empty: self.queue_not_empty.clone(),
             workers_done: self.workers_done.clone(),
-            total_tasks: AtomicU64::new(self.total_tasks.load(Ordering::Relaxed)),
+            total_tasks: self.total_tasks.clone(),
             recs: self.recs.clone(),
             errs: self.errs.clone(),
             exclude_lower: self.exclude_lower.clone(),
@@ -298,12 +339,16 @@ struct WinEntry {
 }
 
 fn read_dir_entries(dir: &str) -> anyhow::Result<(Fingerprint, Vec<WinEntry>)> {
+    // FindExInfoStandard (level 0) is the only valid "full info" level and populates cFileName,
+    // sizes and attributes. Level 1 (FindExInfoBasic) omits the short (8.3) name, and level 2
+    // (FindExInfoMaxInfoLevel) is NOT accepted by FindFirstFileExW — passing it yields
+    // ERROR_INVALID_PARAMETER (0x57) and every read_dir_entries() call fails -> Files: 0 on Windows.
     let pattern = build_search_pattern(dir);
-    let mut find_data: WIN32_FIND_DATAW = unsafe { std::mem::zeroed() };
+    let mut find_data: FindData = unsafe { std::mem::zeroed() };
     let handle = unsafe {
         FindFirstFileExW(
             PCWSTR(pattern.as_ptr()),
-            FINDEX_INFO_LEVELS(1), // FindExInfoBasic
+            FINDEX_INFO_LEVELS(0), // FindExInfoStandard — fills cFileName, sizes and attributes
             &mut find_data as *mut _ as *mut _,
             windows::Win32::Storage::FileSystem::FINDEX_SEARCH_OPS(0),
             None,
@@ -325,7 +370,7 @@ fn read_dir_entries(dir: &str) -> anyhow::Result<(Fingerprint, Vec<WinEntry>)> {
                 is_dir: attrs.is_dir, is_reparse: attrs.is_reparse, attrs,
             });
         }
-        let result = unsafe { FindNextFileW(handle, &mut find_data) };
+        let result = unsafe { FindNextFileW(handle, &mut find_data as *mut _ as *mut _) };
         if result.is_err() {
             let err = result.unwrap_err();
             if err.code() == windows::Win32::Foundation::ERROR_NO_MORE_FILES.to_hresult() { break; }
@@ -358,7 +403,7 @@ fn win32_attrs_to_attrs(attrs: u32) -> Attrs {
     Attrs { is_dir: attrs & FILE_ATTRIBUTE_DIRECTORY.0 != 0, is_reparse: attrs & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0, is_hidden: attrs & FILE_ATTRIBUTE_HIDDEN.0 != 0, is_system: attrs & FILE_ATTRIBUTE_SYSTEM.0 != 0 }
 }
 
-fn filetime_to_system_time(ft: FILETIME) -> SystemTime {
+fn filetime_to_system_time(ft: FileTime) -> SystemTime {
     let ticks = ((ft.dwHighDateTime as u64) << 32) | (ft.dwLowDateTime as u64);
     const TICKS_PER_SEC: u64 = 10_000_000;
     const UNIX_EPOCH_OFFSET: u64 = 116_444_736_000_000_000;
@@ -368,7 +413,7 @@ fn filetime_to_system_time(ft: FILETIME) -> SystemTime {
     UNIX_EPOCH + Duration::new(secs, nanos)
 }
 
-fn filetime_to_unix_ns(ft: FILETIME) -> i64 {
+fn filetime_to_unix_ns(ft: FileTime) -> i64 {
     let ticks = ((ft.dwHighDateTime as u64) << 32) | (ft.dwLowDateTime as u64);
     const TICKS_PER_SEC: u64 = 10_000_000;
     const UNIX_EPOCH_OFFSET: u64 = 116_444_736_000_000_000;
