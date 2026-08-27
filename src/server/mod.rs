@@ -944,15 +944,56 @@ async fn handle_smart_clean(
 /// makes cleanup finish in seconds); Aggressive walks the full tree because
 /// stale/huge/duplicate detection needs complete coverage. A narrow custom
 /// target without standard zones falls back to a full walk of itself.
+/// Enumerate existing filesystem roots (Windows: "C:\", "D:\", ...; Unix: "/").
+fn all_root_volumes() -> Vec<String> {
+    #[cfg(target_os = "windows")]
+    {
+        let mut drives = Vec::new();
+        // Skip A:/B: which are usually floppy/empty slots that can hang on stat.
+        for letter in 'C'..='Z' {
+            let root = format!("{letter}:\\");
+            if std::fs::exists(&root).unwrap_or(false) {
+                drives.push(root);
+            }
+        }
+        if drives.is_empty() {
+            drives.push("C:\\".to_string());
+        }
+        drives
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        vec!["/".to_string()]
+    }
+}
+
 fn smart_scan_roots(root: &str, safety: &crate::config::SafetyLevel) -> Vec<String> {
     use crate::config::SafetyLevel as SL;
 
     if *safety == SL::Aggressive {
+        // Aggressive walks the complete tree. When the user selected a drive root (e.g. "C:\"),
+        // expand to every fixed drive so junk/large files on ALL disks are found; a narrow
+        // custom folder still scans just that folder.
+        if std::path::Path::new(root).parent().is_none() {
+            return all_root_volumes();
+        }
         return vec![root.to_string()];
     }
 
     let root_norm = root.trim_end_matches(['/', '\\']).to_string();
     let is_filesystem_root = std::path::Path::new(root).parent().is_none();
+
+    // User-level junk (Downloads, caches, browser profiles) lives under the user's home/Profile
+    // directory, NOT under an arbitrary scan root. When the user scans a drive root like "C:\",
+    // "{root}\AppData\Local\Temp" resolves to "C:\AppData\..." which never exists on Windows — the
+    // real location is "%USERPROFILE%\AppData\Local\Temp". So root user zones at the home dir when
+    // root is a filesystem root, and stay relative to root otherwise (so a custom target folder
+    // never "escapes" the folder the user actually selected).
+    let home = dirs::home_dir()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|| root_norm.clone());
+    let user_base = if is_filesystem_root { home } else { root_norm.clone() };
+
     let mut zones: Vec<String> = Vec::new();
     let mut push = |p: String| {
         if !zones.contains(&p) {
@@ -963,7 +1004,7 @@ fn smart_scan_roots(root: &str, safety: &crate::config::SafetyLevel) -> Vec<Stri
     #[cfg(target_os = "macos")]
     {
         for rel in ["Downloads", "Library/Caches", "Library/Logs", ".Trash"] {
-            push(format!("{root_norm}/{rel}"));
+            push(format!("{user_base}/{rel}"));
         }
         if is_filesystem_root {
             push("/private/var/folders".to_string());
@@ -979,16 +1020,19 @@ fn smart_scan_roots(root: &str, safety: &crate::config::SafetyLevel) -> Vec<Stri
             r"AppData\Local\Microsoft\Edge\User Data\Default\Cache",
             r"AppData\Local\Mozilla\Firefox\Profiles",
         ] {
-            push(format!("{root_norm}\\{rel}"));
+            push(format!("{user_base}\\{rel}"));
         }
+        // Recycle Bin exists on each fixed drive — cover every one so trash on both disks is seen.
         if is_filesystem_root {
-            push(r"C:\$Recycle.Bin".to_string());
+            for drive in all_root_volumes() {
+                push(format!("{}\\$Recycle.Bin", drive.trim_end_matches(['/', '\\'])));
+            }
         }
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
         for rel in ["Downloads", ".cache", ".local/share/Trash"] {
-            push(format!("{root_norm}/{rel}"));
+            push(format!("{user_base}/{rel}"));
         }
         if is_filesystem_root {
             push("/tmp".to_string());
@@ -1043,6 +1087,10 @@ fn filter_findings_by_safety(findings: Vec<Finding>, config: &Config) -> Vec<Fin
             Category::LanguageFile,
             Category::OldBackup,
             Category::MailAttachment,
+            // Large files are informational (not auto-deleted), so surface them in the default
+            // balanced scan too — users want to see what is taking up space on their disks.
+            Category::Large,
+            Category::Huge,
         ],
         SafetyLevel::Aggressive => vec![
             Category::Junk,
