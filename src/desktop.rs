@@ -122,6 +122,24 @@ mod tests {
         .await;
         assert_eq!(index.status(), 200);
         assert!(index.body().starts_with(b"<!DOCTYPE html>"));
+        assert!(index
+            .body()
+            .windows(b"data-language=\"en\"".len())
+            .any(|window| window == b"data-language=\"en\""));
+
+        let translations = route_desktop_request(
+            router.clone(),
+            wry::http::Request::builder()
+                .uri("unused-removal://app/i18n.js")
+                .body(Vec::new())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(translations.status(), 200);
+        assert!(translations
+            .body()
+            .windows(b"initLanguageToggle".len())
+            .any(|window| window == b"initLanguageToggle"));
 
         let config = route_desktop_request(
             router,

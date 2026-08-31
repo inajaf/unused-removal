@@ -1,6 +1,8 @@
 // unused-removal Desktop UI - Main Application
 // This file is embedded and served by the Rust binary
 
+import { initLanguageToggle, isEnglish, tr, translateDom } from './i18n.js';
+
 // ===== Types =====
 const Category = {
   HUGE: 'huge',
@@ -186,12 +188,12 @@ function formatBytes(bytes) {
 }
 
 function formatNumber(n) {
-  return n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+  return new Intl.NumberFormat(isEnglish() ? 'en-US' : 'ru-RU').format(n);
 }
 
 function formatDate(isoString) {
   const date = new Date(isoString);
-  return date.toLocaleString('ru-RU', {
+  return date.toLocaleString(isEnglish() ? 'en-US' : 'ru-RU', {
     year: 'numeric', month: 'short', day: 'numeric',
     hour: '2-digit', minute: '2-digit'
   });
@@ -212,7 +214,7 @@ const CATEGORY_LABELS = {
 };
 
 function categoryLabel(cat) {
-  return CATEGORY_LABELS[cat] || cat;
+  return tr(CATEGORY_LABELS[cat] || cat);
 }
 
 // ===== Professional icon set (Lucide-style inline SVG, no external deps) =====
@@ -256,7 +258,7 @@ function categoryIcon(cat) {
 
 function riskLabel(risk) {
   const labels = { safe: 'Безопасно', caution: 'Осторожно', protected: 'Защищено' };
-  return labels[risk] || risk;
+  return tr(labels[risk] || risk);
 }
 
 function riskColor(risk) {
@@ -321,12 +323,13 @@ const api = {
 };
 
 // ===== Initialization =====
-function init() {
+async function init() {
   cacheElements();
   bindEvents();
   setupSafetyControls();
   bindCategoryCardEvents();
-  loadConfig();
+  await loadConfig();
+  initLanguageToggle();
 }
 
 // Safety level picker: custom cards (hero) + pills (results) synced with the
@@ -361,7 +364,7 @@ const SAFETY_LEVEL_NAMES = { safe: 'Безопасный', balanced: 'Сбала
 
 function updateResultsLevelLabel() {
   const el = document.getElementById('results-level-label');
-  if (el) el.textContent = SAFETY_LEVEL_NAMES[state.smartSafetyLevel] || state.smartSafetyLevel;
+  if (el) el.textContent = tr(SAFETY_LEVEL_NAMES[state.smartSafetyLevel] || state.smartSafetyLevel);
 }
 
 function updateSafetyControlStates() {
@@ -608,7 +611,7 @@ function populateRootPaths(cfg) {
 
   const opt = document.createElement('option');
   opt.value = 'custom';
-  opt.textContent = 'Указать свой путь…';
+  opt.textContent = tr('Указать свой путь…');
   els.rootSelect.appendChild(opt);
 
   if (cfg.root && paths.includes(cfg.root)) {
@@ -624,10 +627,10 @@ function populateRootPaths(cfg) {
 
 // ===== Smart scan target picker =====
 function targetLabel(p) {
-  if (p === '/') return 'Весь диск';
+  if (p === '/') return tr('Весь диск');
   const drive = p.match(/^([a-zA-Z]):\\?$/);
-  if (drive) return `Диск ${drive[1].toUpperCase()}:`;
-  if (p === '.' || p === './') return 'Текущая папка';
+  if (drive) return isEnglish() ? `Drive ${drive[1].toUpperCase()}:` : `Диск ${drive[1].toUpperCase()}:`;
+  if (p === '.' || p === './') return tr('Текущая папка');
   const parts = p.replace(/[\\/]+$/, '').split(/[\\/]/);
   return parts[parts.length - 1] || p;
 }
@@ -647,9 +650,9 @@ function buildTargetChips(paths) {
 <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
 <span>${escapeHtml(targetLabel(p))}</span>
 </button>`).join('') + `
-<button type="button" class="target-chip target-chip-custom" data-target="__custom__" title="Указать произвольную папку">
+<button type="button" class="target-chip target-chip-custom" data-target="__custom__" title="${tr('Указать произвольную папку')}">
 <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>
-<span>Своя папка…</span>
+<span>${tr('Своя папка…')}</span>
 </button>`;
 
   // Default: first suggested path (server already has it in config).
@@ -712,7 +715,7 @@ function detectDrivesFallback() {
   els.rootSelect.innerHTML = defaults.map(d => `<option value="${d}">${d}</option>`).join('');
   const opt = document.createElement('option');
   opt.value = 'custom';
-  opt.textContent = 'Указать свой путь…';
+  opt.textContent = tr('Указать свой путь…');
   els.rootSelect.appendChild(opt);
   buildTargetChips(defaults);
 }
@@ -787,7 +790,7 @@ function setPhase(phase) {
     state.smartBusy = false;
     if (els.btnSmartScan) els.btnSmartScan.disabled = false;
     els.smartProgressPercent.textContent = '0';
-    els.smartProgressDesc.textContent = 'Подготовка…';
+    els.smartProgressDesc.textContent = tr('Подготовка…');
     const ring = els.smartProgressRingFill;
     if (ring) {
       const CIRC = 2 * Math.PI * 49;
@@ -871,12 +874,14 @@ function updateProgress(p, done = false) {
   els.statFiles.textContent = formatNumber(p.files);
   els.statDirs.textContent = formatNumber(p.dirs);
   els.statBytes.textContent = formatBytes(p.bytes);
-  els.statRate.textContent = p.rate_fps ? `${formatNumber(Math.round(p.rate_fps))} ф/с` : '—';
+  els.statRate.textContent = p.rate_fps
+    ? `${formatNumber(Math.round(p.rate_fps))} ${isEnglish() ? 'files/s' : 'ф/с'}`
+    : '—';
   els.statElapsed.textContent = p.remain_s > 0
     ? `${formatDuration(p.elapsed_s)} / ~${formatDuration(p.remain_s)}`
     : formatDuration(p.elapsed_s);
   els.statCached.textContent = formatNumber(p.cached);
-  els.statCurrent.textContent = p.current || '—';
+  els.statCurrent.textContent = tr(p.current || '—');
 
   const ring = els.progressRingFill;
   if (ring) {
@@ -895,17 +900,19 @@ function updateProgress(p, done = false) {
 }
 
 function formatDuration(seconds) {
-  if (seconds < 60) return seconds.toFixed(1) + ' с';
+  if (seconds < 60) return seconds.toFixed(1) + (isEnglish() ? ' s' : ' с');
   const m = Math.floor(seconds / 60);
   const s = Math.floor(seconds % 60);
-  if (m < 60) return `${m} мин ${s} с`;
-  return `${Math.floor(m / 60)} ч ${m % 60} мин`;
+  if (m < 60) return isEnglish() ? `${m} min ${s} s` : `${m} мин ${s} с`;
+  return isEnglish()
+    ? `${Math.floor(m / 60)} h ${m % 60} min`
+    : `${Math.floor(m / 60)} ч ${m % 60} мин`;
 }
 
 function updateRecentFiles(recent) {
   const el = els.recentFiles;
   if (!el) return;
-  if (recent.length === 0) { el.innerHTML = '<span class="recent-empty">Ещё нет файлов…</span>'; return; }
+  if (recent.length === 0) { el.innerHTML = `<span class="recent-empty">${tr('Ещё нет файлов…')}</span>`; return; }
 
   const newPaths = recent.slice(-30).reverse();
   const fragments = newPaths.map((p, i) => {
@@ -1041,9 +1048,9 @@ function pollSmartProgress() {
 function updateSmartProgress(p, done = false) {
   // The active disk and post-scan analysis stage come from the backend. "100" is reserved for
   // a response whose results are actually ready, never merely for a finished filesystem walk.
-  els.smartProgressDesc.textContent = done
+  els.smartProgressDesc.textContent = tr(done
     ? 'Завершено'
-    : (p.current || (p.files === 0 ? 'Индексация файловой системы…' : 'Сканирование…'));
+    : (p.current || (p.files === 0 ? 'Индексация файловой системы…' : 'Сканирование…')));
 
   if (els.smartProgressDirs) els.smartProgressDirs.textContent = formatNumber(p.dirs || 0);
   if (els.smartProgressFiles) els.smartProgressFiles.textContent = formatNumber(p.files);
@@ -1136,16 +1143,18 @@ function renderCategoryCards() {
   // Nothing found for this level/target — explain instead of showing a void
   if (!state.smartScanCategories.length) {
     const levelNames = { safe: 'Безопасный', balanced: 'Сбалансированный', aggressive: 'Агрессивный' };
-    const lvl = levelNames[state.smartSafetyLevel] || state.smartSafetyLevel;
-    const root = escapeHtml(state.lastSmartRoot || 'выбранной папке');
+    const lvl = tr(levelNames[state.smartSafetyLevel] || state.smartSafetyLevel);
+    const root = escapeHtml(state.lastSmartRoot || (isEnglish() ? 'selected location' : 'выбранной папке'));
     container.innerHTML = `
 <div class="empty-state smart-empty">
 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
-<h3>Здесь нечего чистить</h3>
-<p>Для уровня «${lvl}» в «${root}» подходящих файлов не нашлось.<br>Попробуйте агрессивнее или просканируйте другую папку.</p>
+<h3>${tr('Здесь нечего чистить')}</h3>
+<p>${isEnglish()
+  ? `No matching files were found for the “${lvl}” level in “${root}”.<br>Try Aggressive or scan another location.`
+  : `Для уровня «${lvl}» в «${root}» подходящих файлов не нашлось.<br>Попробуйте агрессивнее или просканируйте другую папку.`}</p>
 <div class="empty-actions">
-<button type="button" class="btn btn-secondary btn-sm" id="btn-empty-aggressive">Уровень «Агрессивный» и повторить</button>
-<button type="button" class="btn btn-ghost btn-sm" id="btn-empty-retarget">Сменить папку сканирования</button>
+<button type="button" class="btn btn-secondary btn-sm" id="btn-empty-aggressive">${isEnglish() ? 'Retry with Aggressive' : 'Уровень «Агрессивный» и повторить'}</button>
+<button type="button" class="btn btn-ghost btn-sm" id="btn-empty-retarget">${tr('Сменить папку сканирования')}</button>
 </div>
 </div>`;
     return;
@@ -1158,7 +1167,7 @@ function renderCategoryCards() {
     const isSelected = state.smartSelectedCategories.has(cat.category);
     const isBulkCleanable = isAllowed && cat.risk === Risk.SAFE;
     const icon = iconSvg(cat.category, 18);
-    const description = CATEGORY_DESCRIPTIONS[cat.category] || cat.description;
+    const description = tr(CATEGORY_DESCRIPTIONS[cat.category] || cat.description);
     const riskClass = cat.risk === 'safe' ? 'safe' : cat.risk === 'caution' ? 'caution' : 'protected';
     
     return `
@@ -1167,22 +1176,22 @@ function renderCategoryCards() {
     <div class="category-icon">${icon}</div>
     <div class="category-info">
       <div class="category-name">${escapeHtml(categoryLabel(cat.category))}</div>
-      <div class="category-count">${formatNumber(cat.count)} файлов · ${formatBytes(cat.total_size)}</div>
+      <div class="category-count">${formatNumber(cat.count)} ${isEnglish() ? 'files' : 'файлов'} · ${formatBytes(cat.total_size)}</div>
     </div>
-    <span class="category-risk ${riskClass}">${cat.risk === 'safe' ? 'Безопасно' : cat.risk === 'caution' ? 'Осторожно' : 'Защищено'}</span>
+    <span class="category-risk ${riskClass}">${riskLabel(cat.risk)}</span>
   </div>
   <div class="category-stats">
     <span class="category-size">${formatBytes(cat.total_size)}</span>
     <label class="category-checkbox">
       <input type="checkbox" data-category-check="${escapeHtml(cat.category)}" ${isSelected ? 'checked' : ''} ${!isBulkCleanable ? 'disabled' : ''}>
-      <span>${isBulkCleanable ? 'Выбрать' : 'Только просмотр'}</span>
+      <span>${tr(isBulkCleanable ? 'Выбрать' : 'Только просмотр')}</span>
     </label>
   </div>
   <div class="category-paths">
     ${cat.paths_sample.slice(0, 3).map(p => `<div class="category-path" title="${escapeHtml(p)}">${escapeHtml(p)}</div>`).join('')}
-    ${cat.count > 3 ? `<button type="button" class="category-open-list" data-open-category="${escapeHtml(cat.category)}">Показать все файлы категории — ${formatNumber(cat.count)}</button>` : ''}
+    ${cat.count > 3 ? `<button type="button" class="category-open-list" data-open-category="${escapeHtml(cat.category)}">${isEnglish() ? `Show all ${formatNumber(cat.count)} files` : `Показать все файлы категории — ${formatNumber(cat.count)}`}</button>` : ''}
   </div>
-  <button class="category-toggle" data-category-card="true" aria-label="Развернуть">
+  <button class="category-toggle" data-category-card="true" aria-label="${tr('Развернуть')}">
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
   </button>
 </div>
@@ -1332,13 +1341,17 @@ async function executeSmartClean() {
     .filter(c => state.smartSelectedCategories.has(c.category))
     .reduce((sum, c) => sum + c.count, 0);
   
-  els.modalTitle.innerHTML = `<svg class="modal-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg> Очистка в Корзину`;
-  els.modalText.innerHTML = `
-Удалить <strong>${formatNumber(count)}</strong> файлов 
+  els.modalTitle.innerHTML = `<svg class="modal-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg> ${tr('Очистка в Корзину')}`;
+  els.modalText.innerHTML = isEnglish() ? `
+Move <strong>${formatNumber(count)}</strong> files
+(<strong>${formatBytes(totalSize)}</strong>) from <strong>${categories.length}</strong> categories to the Recycle Bin?<br><br>
+The files can be restored later.
+  ` : `
+Удалить <strong>${formatNumber(count)}</strong> файлов
 (<strong>${formatBytes(totalSize)}</strong>) в <strong>${categories.length}</strong> категориях?<br><br>
 Файлы можно будет восстановить из Корзины.
   `;
-  els.modalConfirm.innerHTML = `<svg class="btn-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg> В Корзину`;
+  els.modalConfirm.innerHTML = `<svg class="btn-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg> ${tr('В Корзину')}`;
   els.modalConfirm.className = 'btn btn-primary';
   els.modal.classList.remove('hidden');
   els.modalConfirm.focus();
@@ -1466,14 +1479,14 @@ function renderTable() {
     const selectedClass = isSelected ? ' selected' : '';
     return `
 <tr data-path="${escapeHtml(f.path)}" class="${selectedClass}" style="--risk-color: ${riskColor(risk)}; animation-delay: ${i * 15}ms">
-  <td><input type="checkbox" class="row-check" ${checked} ${isProtected ? 'disabled title="Защищённый системный путь — только просмотр"' : ''} data-path="${escapeHtml(f.path)}"></td>
+  <td><input type="checkbox" class="row-check" ${checked} ${isProtected ? `disabled title="${tr('Защищённый системный путь — только просмотр')}"` : ''} data-path="${escapeHtml(f.path)}"></td>
   <td class="path-cell" title="${escapeHtml(f.path)}">
     <span class="file-icon">${categoryIcon(f.category)}</span>
     <span class="file-name">${escapeHtml(f.path)}</span>
   </td>
   <td>${formatBytes(f.size)}</td>
   <td><span class="cat-badge cat-${f.category}">${categoryIcon(f.category)} ${categoryLabel(f.category)}</span></td>
-  <td>${escapeHtml(f.reason)}</td>
+  <td>${escapeHtml(tr(f.reason))}</td>
   <td><span class="risk-badge ${riskClass(risk)}">${riskLabel(risk)}</span></td>
   <td>${formatDateCached(f.mod_time)}</td>
 </tr>
@@ -1497,7 +1510,9 @@ function renderTable() {
 
 function updatePagination() {
   state.totalPages = Math.max(1, Math.ceil(state.filteredFindings.length / state.pageSize));
-  els.pageInfo.textContent = `Стр. ${state.currentPage} / ${state.totalPages}`;
+  els.pageInfo.textContent = isEnglish()
+    ? `Page ${state.currentPage} / ${state.totalPages}`
+    : `Стр. ${state.currentPage} / ${state.totalPages}`;
   els.btnPrev.disabled = state.currentPage <= 1;
   els.btnNext.disabled = state.currentPage >= state.totalPages;
 }
@@ -1549,7 +1564,7 @@ function updateSummary() {
   state.findings.forEach(f => { byCat[f.category] = (byCat[f.category] || 0) + 1; });
   const parts = Object.entries(byCat).map(([cat, cnt]) => `${categoryIcon(cat)} ${categoryLabel(cat)}: ${cnt}`).join(' • ');
   if (els.summaryTotal) els.summaryTotal.textContent = String(state.findings.length);
-  if (els.summaryCats) els.summaryCats.innerHTML = parts || 'пусто';
+  if (els.summaryCats) els.summaryCats.innerHTML = parts || tr('пусто');
 }
 
 function cycleCategoryFilter() {
@@ -1576,17 +1591,21 @@ function confirmDelete(mode) {
   clearModalConfirmAction(); // never inherit a stale smart-clean action
   const isHard = mode === 'hard';
   els.modalTitle.innerHTML = (isHard ? iconSvg('octagon', 18, 'modal-icon danger') : iconSvg('trash', 18, 'modal-icon')) + ' ' +
-    (isHard ? 'Безвозвратное удаление' : 'Перемещение в Корзину');
+    tr(isHard ? 'Безвозвратное удаление' : 'Перемещение в Корзину');
   const totalSize = Array.from(state.selectedPaths).reduce((sum, p) => {
     const f = state.findings.find(x => x.path === p);
     return sum + (f?.size || 0);
   }, 0);
-  els.modalText.innerHTML = `
+  els.modalText.innerHTML = isEnglish() ? `
+Delete <strong>${formatNumber(state.selectedPaths.size)}</strong> files
+(<strong>${formatBytes(totalSize)}</strong>)?<br><br>
+${isHard ? iconSvg('alert', 16, 'modal-icon danger') + ' <strong>This action cannot be undone.</strong> Files will not go to the Recycle Bin.' : iconSvg('check_circle', 16, 'modal-icon success') + ' Files can be restored from the Recycle Bin.'}
+  ` : `
 Удалить <strong>${formatNumber(state.selectedPaths.size)}</strong> файлов
 (<strong>${formatBytes(totalSize)}</strong>)?<br><br>
 ${isHard ? iconSvg('alert', 16, 'modal-icon danger') + ' <strong>Это действие НЕОБРАТИМО!</strong> Файлы не попадут в Корзину.' : iconSvg('check_circle', 16, 'modal-icon success') + ' Файлы можно будет восстановить из Корзины.'}
   `;
-  els.modalConfirm.innerHTML = (isHard ? iconSvg('octagon', 15, 'btn-icon') : iconSvg('trash', 15, 'btn-icon')) + ' ' + (isHard ? 'Удалить навсегда' : 'В Корзину');
+  els.modalConfirm.innerHTML = (isHard ? iconSvg('octagon', 15, 'btn-icon') : iconSvg('trash', 15, 'btn-icon')) + ' ' + tr(isHard ? 'Удалить навсегда' : 'В Корзину');
   els.modalConfirm.className = isHard ? 'btn danger' : 'btn primary';
   els.modal.classList.remove('hidden');
   els.modalConfirm.focus();
@@ -1650,7 +1669,7 @@ function showToast(message, type = 'info') {
   const container = document.getElementById('toast-container');
   const toast = document.createElement('div');
   toast.className = `toast toast-${type}`;
-  toast.textContent = message;
+  toast.textContent = tr(message);
   container.appendChild(toast);
 
   // Trigger entrance animation
@@ -1663,6 +1682,20 @@ function showToast(message, type = 'info') {
 }
 
 // ===== Start =====
+window.addEventListener('app-language-change', () => {
+  _dateCache.clear();
+  updateResultsLevelLabel();
+  buildTargetChips([...document.querySelectorAll('.target-chip:not(.target-chip-custom)')]
+    .map(chip => chip.dataset.target)
+    .filter(Boolean));
+  if (state.smartScanCategories.length || state.phase === 'smart-results') renderCategoryCards();
+  if (state.findings.length || state.phase === 'results') {
+    renderTable();
+    updateSummary();
+  }
+  translateDom(document);
+});
+
 document.addEventListener('DOMContentLoaded', init);
 
 // Expose for debugging
