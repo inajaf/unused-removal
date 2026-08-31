@@ -13,7 +13,7 @@ jobs:
     name: Validate release tag
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -33,7 +33,7 @@ jobs:
     needs: validate
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -54,18 +54,18 @@ jobs:
         run: |
           $version = $env:GITHUB_REF_NAME.TrimStart('v')
           $stage = "target/release/unused-removal-$version-windows-x64"
+          $artifacts = "release-artifacts"
           New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          New-Item -ItemType Directory -Force -Path $artifacts | Out-Null
           Copy-Item -LiteralPath "target/release/unused-removal.exe" -Destination $stage
           Copy-Item -LiteralPath "README.md" -Destination $stage
-          Compress-Archive -Path "$stage/*" -DestinationPath "target/release/unused-removal-$version-windows-x64-portable.zip" -CompressionLevel Optimal
-          Copy-Item -LiteralPath "target/release/installer/unused-removal-setup-$version.exe" -Destination "target/release/unused-removal-$version-windows-x64-setup.exe"
+          Compress-Archive -Path "$stage/*" -DestinationPath "$artifacts/unused-removal-$version-windows-x64-portable.zip" -CompressionLevel Optimal
+          Copy-Item -LiteralPath "target/release/installer/unused-removal-setup-$version.exe" -Destination "$artifacts/unused-removal-$version-windows-x64-setup.exe"
 
       - uses: actions/upload-artifact@v4
         with:
           name: windows-x64
-          path: |
-            target/release/unused-removal-*-windows-x64-portable.zip
-            target/release/unused-removal-*-windows-x64-setup.exe
+          path: release-artifacts/
           if-no-files-found: error
 
   macos:
@@ -81,7 +81,7 @@ jobs:
             arch: x64
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -97,18 +97,17 @@ jobs:
         shell: bash
         run: |
           version="${GITHUB_REF_NAME#v}"
+          mkdir -p release-artifacts
           ditto -c -k --sequesterRsrc --keepParent \
             target/release/unused-removal.app \
-            "target/release/unused-removal-${version}-macos-${{ matrix.arch }}.zip"
+            "release-artifacts/unused-removal-${version}-macos-${{ matrix.arch }}.zip"
           mv "target/release/unused-removal-${version}.dmg" \
-            "target/release/unused-removal-${version}-macos-${{ matrix.arch }}.dmg"
+            "release-artifacts/unused-removal-${version}-macos-${{ matrix.arch }}.dmg"
 
       - uses: actions/upload-artifact@v4
         with:
           name: macos-${{ matrix.arch }}
-          path: |
-            target/release/unused-removal-*-macos-${{ matrix.arch }}.zip
-            target/release/unused-removal-*-macos-${{ matrix.arch }}.dmg
+          path: release-artifacts/
           if-no-files-found: error
 
   publish:
@@ -116,9 +115,9 @@ jobs:
     needs: [windows, macos]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v5
         with:
           path: dist
           merge-multiple: true
@@ -140,4 +139,3 @@ jobs:
             --verify-tag \
             --title "unused-removal ${GITHUB_REF_NAME#v}" \
             --notes-file ".github/release-notes/${GITHUB_REF_NAME}.md"
-
