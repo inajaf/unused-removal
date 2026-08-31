@@ -1,0 +1,143 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    name: Validate release tag
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Match Cargo version to tag
+        shell: bash
+        run: |
+          version="$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; print(json.load(sys.stdin)["packages"][0]["version"])')"
+          test "v${version}" = "${GITHUB_REF_NAME}"
+
+      - name: Validate embedded UI JavaScript
+        run: |
+          node --check web/app.js
+          node --check web/i18n.js
+
+  windows:
+    name: Windows x64 packages
+    needs: validate
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --yes --no-progress
+
+      - name: Test and build Windows desktop app
+        shell: pwsh
+        run: |
+          cargo test --features desktop
+          ./scripts/build-desktop-windows.ps1 -Installer
+
+      - name: Create Windows packages
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME.TrimStart('v')
+          $stage = "target/release/unused-removal-$version-windows-x64"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item -LiteralPath "target/release/unused-removal.exe" -Destination $stage
+          Copy-Item -LiteralPath "README.md" -Destination $stage
+          Compress-Archive -Path "$stage/*" -DestinationPath "target/release/unused-removal-$version-windows-x64-portable.zip" -CompressionLevel Optimal
+          Copy-Item -LiteralPath "target/release/installer/unused-removal-setup-$version.exe" -Destination "target/release/unused-removal-$version-windows-x64-setup.exe"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64
+          path: |
+            target/release/unused-removal-*-windows-x64-portable.zip
+            target/release/unused-removal-*-windows-x64-setup.exe
+          if-no-files-found: error
+
+  macos:
+    name: macOS ${{ matrix.arch }} packages
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Test and build macOS desktop app
+        shell: bash
+        run: |
+          cargo test --features desktop
+          bash scripts/build-desktop-macos.sh --dmg
+
+      - name: Create macOS packages
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          ditto -c -k --sequesterRsrc --keepParent \
+            target/release/unused-removal.app \
+            "target/release/unused-removal-${version}-macos-${{ matrix.arch }}.zip"
+          mv "target/release/unused-removal-${version}.dmg" \
+            "target/release/unused-removal-${version}-macos-${{ matrix.arch }}.dmg"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-${{ matrix.arch }}
+          path: |
+            target/release/unused-removal-*-macos-${{ matrix.arch }}.zip
+            target/release/unused-removal-*-macos-${{ matrix.arch }}.dmg
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub Release
+    needs: [windows, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Add presentation assets and checksums
+        shell: bash
+        run: |
+          cp marketing/dist/unused-removal-windows-demo.gif dist/
+          cp marketing/dist/unused-removal-windows-comparison.png dist/
+          cd dist
+          sha256sum * | sort > SHA256SUMS.txt
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh release create "${GITHUB_REF_NAME}" dist/* \
+            --verify-tag \
+            --title "unused-removal ${GITHUB_REF_NAME#v}" \
+            --notes-file ".github/release-notes/${GITHUB_REF_NAME}.md"
+
